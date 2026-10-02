@@ -4,12 +4,12 @@ retriever:
   name: bm25
   implementation: pyserini
 
-  # Pyserini defaults for MS MARCO
+  # A1 fix: These are MS MARCO-tuned values from Pyserini, NOT Pyserini's
+  # built-in defaults (which are k1=0.9, b=0.4).
+  # Reference: https://github.com/castorini/pyserini/blob/master/docs/experiments-msmarco-passage.md
   index_params:
     k1: 0.82
     b: 0.68
-    # These are Pyserini's tuned defaults for MS MARCO Passage v1
-    # Reference: https://github.com/castorini/pyserini/blob/master/docs/experiments-msmarco-passage.md
 
   search_params:
     k1: 0.82

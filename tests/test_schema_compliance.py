@@ -15,15 +15,23 @@ from shared.schema import (
     validate_score_matrix,
     validate_attribution,
     validate_intervention,
+    validate_synthetic_gt,
     new_score_matrix,
     new_attribution,
     new_intervention,
+    new_synthetic_gt,
     save_parquet,
     load_parquet,
     VALID_METHODS,
     VALID_INTERVENTIONS,
+    VALID_SETTINGS,
 )
-from shared.logger import ScoreLogger, AttributionLogger, InterventionLogger
+from shared.logger import (
+    ScoreLogger,
+    AttributionLogger,
+    InterventionLogger,
+    SyntheticGTLogger,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -67,9 +75,22 @@ def sample_intervention() -> pd.DataFrame:
         "query_id":          ["q1", "q1"],
         "doc_id":            ["d1", "d2"],
         "intervention_type": ["remove_stage2", "remove_stage2"],
+        "seed":              [42, 42],
         "rank_before":       [2, 1],
         "rank_after":        [5, 3],
         "displacement":      [3, 2],
+    })
+
+
+@pytest.fixture
+def sample_synthetic_gt() -> pd.DataFrame:
+    """A minimal valid synthetic ground-truth result."""
+    return pd.DataFrame({
+        "query_id":                 ["q1", "q1"],
+        "doc_id":                   ["d1", "d2"],
+        "true_stage_1_attribution": [0.7, 0.3],
+        "setting":                  ["linear_mix", "linear_mix"],
+        "alpha":                    [0.7, 0.7],
     })
 
 
@@ -82,6 +103,12 @@ class TestScoreMatrix:
     def test_valid(self, sample_score_matrix):
         df = validate_score_matrix(sample_score_matrix)
         assert len(df) == 5
+
+    def test_does_not_mutate_caller(self, sample_score_matrix):
+        """A2 fix: validation must not modify the caller's DataFrame."""
+        original_dtypes = sample_score_matrix.dtypes.copy()
+        validate_score_matrix(sample_score_matrix)
+        pd.testing.assert_series_equal(sample_score_matrix.dtypes, original_dtypes)
 
     def test_missing_column(self, sample_score_matrix):
         df = sample_score_matrix.drop(columns=["stage_1_rank"])
@@ -125,6 +152,12 @@ class TestAttribution:
     def test_valid(self, sample_attribution):
         df = validate_attribution(sample_attribution)
         assert len(df) == 2
+
+    def test_does_not_mutate_caller(self, sample_attribution):
+        """A2 fix: validation must not modify the caller's DataFrame."""
+        original_cols = list(sample_attribution.columns)
+        validate_attribution(sample_attribution)
+        assert list(sample_attribution.columns) == original_cols
 
     def test_bad_method_rejected(self, sample_attribution):
         df = sample_attribution.copy()
@@ -176,6 +209,59 @@ class TestIntervention:
         with pytest.raises(SchemaError, match="displacement != rank_after - rank_before"):
             validate_intervention(df)
 
+    def test_seed_column_present(self, sample_intervention):
+        """Q3: seed column must be accepted."""
+        df = validate_intervention(sample_intervention)
+        assert "seed" in df.columns
+
+    def test_seed_nullable(self):
+        """Q3: seed can be null for deterministic interventions."""
+        df = pd.DataFrame({
+            "query_id":          ["q1"],
+            "doc_id":            ["d1"],
+            "intervention_type": ["remove_stage2"],
+            "seed":              [pd.NA],
+            "rank_before":       [2],
+            "rank_after":        [5],
+            "displacement":      [3],
+        })
+        result = validate_intervention(df)
+        assert len(result) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Synthetic GT tests
+# ──────────────────────────────────────────────────────────────────────
+
+class TestSyntheticGT:
+
+    def test_valid(self, sample_synthetic_gt):
+        df = validate_synthetic_gt(sample_synthetic_gt)
+        assert len(df) == 2
+
+    def test_bad_setting_rejected(self, sample_synthetic_gt):
+        df = sample_synthetic_gt.copy()
+        df.loc[0, "setting"] = "unknown_setting"
+        with pytest.raises(SchemaError, match="unknown setting"):
+            validate_synthetic_gt(df)
+
+    def test_alpha_out_of_range(self, sample_synthetic_gt):
+        df = sample_synthetic_gt.copy()
+        df.loc[0, "alpha"] = 1.5
+        with pytest.raises(SchemaError, match="alpha must be in"):
+            validate_synthetic_gt(df)
+
+    def test_attribution_out_of_range(self, sample_synthetic_gt):
+        df = sample_synthetic_gt.copy()
+        df.loc[0, "true_stage_1_attribution"] = -0.1
+        with pytest.raises(SchemaError, match="true_stage_1_attribution must be in"):
+            validate_synthetic_gt(df)
+
+    def test_empty_df(self):
+        df = new_synthetic_gt()
+        result = validate_synthetic_gt(df)
+        assert len(result) == 0
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Logger tests
@@ -213,9 +299,35 @@ class TestLoggers:
             query_id="q1", doc_id="d1",
             intervention_type="remove_stage2",
             rank_before=3, rank_after=10,
+            seed=42,
         )
         df = log.to_dataframe()
         assert df.iloc[0]["displacement"] == 7
+
+    def test_intervention_logger_with_seed(self):
+        """Q3: InterventionLogger must accept seed parameter."""
+        log = InterventionLogger()
+        log.add(
+            query_id="q1", doc_id="d1",
+            intervention_type="randomize_stage1_scores",
+            rank_before=3, rank_after=10,
+            seed=123,
+        )
+        df = log.to_dataframe()
+        assert df.iloc[0]["seed"] == 123
+
+    def test_synthetic_gt_logger(self):
+        """Q4: SyntheticGTLogger should produce valid synthetic GT."""
+        log = SyntheticGTLogger()
+        log.add(
+            query_id="q1", doc_id="d1",
+            true_stage_1_attribution=0.7,
+            setting="linear_mix",
+            alpha=0.7,
+        )
+        df = log.to_dataframe()
+        assert len(df) == 1
+        assert df.iloc[0]["setting"] == "linear_mix"
 
     def test_score_logger_parquet_roundtrip(self, tmp_path):
         log = ScoreLogger()
@@ -247,3 +359,13 @@ class TestParquetIO:
     def test_load_nonexistent_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             load_parquet(tmp_path / "nope.parquet", "score_matrix")
+
+    def test_synthetic_gt_roundtrip(self, sample_synthetic_gt, tmp_path):
+        path = save_parquet(sample_synthetic_gt, tmp_path / "gt.parquet", "synthetic_gt")
+        loaded = load_parquet(path, "synthetic_gt")
+        assert len(loaded) == len(sample_synthetic_gt)
+
+    def test_intervention_with_seed_roundtrip(self, sample_intervention, tmp_path):
+        path = save_parquet(sample_intervention, tmp_path / "interv.parquet", "intervention")
+        loaded = load_parquet(path, "intervention")
+        assert "seed" in loaded.columns

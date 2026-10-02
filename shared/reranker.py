@@ -76,10 +76,16 @@ class Reranker:
             self.config.max_length,
         )
 
+        # A4 fix: apply dtype from config
+        model_kwargs = {}
+        if self.config.dtype == "float16":
+            model_kwargs["torch_dtype"] = torch.float16
+
         self._model = CrossEncoder(
             self.config.model_name,
             max_length=self.config.max_length,
             device=device,
+            **model_kwargs,
         )
 
     @property

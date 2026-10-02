@@ -29,9 +29,18 @@ INTERVENTION_SEEDS = [42, 123, 456]
 
 
 def set_global_seed(seed: int = DEFAULT_SEED) -> None:
-    """Set random seed for Python, NumPy, and (if available) PyTorch."""
+    """
+    Set random seed for Python, NumPy, and (if available) PyTorch.
+
+    Note: Setting PYTHONHASHSEED here has no effect on the current process
+    (it must be set before the Python interpreter starts). It is set for
+    any child processes spawned via subprocess/os.system.  To guarantee
+    hash reproducibility, set PYTHONHASHSEED in the shell before running
+    the pipeline:  export PYTHONHASHSEED=42
+    """
     random.seed(seed)
     np.random.seed(seed)
+    # U4: Only affects child processes; document the limitation above
     os.environ["PYTHONHASHSEED"] = str(seed)
 
     try:

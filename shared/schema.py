@@ -4,7 +4,8 @@ schema.py — Data contract definitions for the stage-level attribution benchmar
 Every pipeline output, attribution result, and intervention result must conform
 to these schemas.  This module provides:
 
-  1. Column-name constants and dtypes for the three core DataFrames.
+  1. Column-name constants and dtypes for the three core DataFrames
+     (plus synthetic ground-truth).
   2. Validation functions that raise on schema violations.
   3. Factory helpers to create empty, correctly-typed DataFrames.
   4. I/O wrappers (read/write Parquet) that validate on every round-trip.
@@ -59,9 +60,19 @@ INTERVENTION_COLUMNS: dict[str, str] = {
     "query_id":           "string",
     "doc_id":             "string",
     "intervention_type":  "string",
+    "seed":               "Int64",       # Q3: randomisation seed for reproducibility
     "rank_before":        "Int64",
     "rank_after":         "Int64",
-    "displacement":       "Int64",
+    "displacement":       "Int64",       # rank_after − rank_before (positive = rank worsened)
+}
+
+# Q4: Synthetic ground-truth schema (for planted-alpha experiments)
+SYNTHETIC_GT_COLUMNS: dict[str, str] = {
+    "query_id":                 "string",
+    "doc_id":                   "string",
+    "true_stage_1_attribution": "float64",
+    "setting":                  "string",   # e.g. "linear_mix", "gated", "adversarial"
+    "alpha":                    "float64",  # the planted mixing weight
 }
 
 # Allowed categorical values
@@ -76,6 +87,12 @@ VALID_INTERVENTIONS = frozenset({
     "remove_stage2",
     "randomize_stage1_scores",
     "remove_gating",
+})
+
+VALID_SETTINGS = frozenset({
+    "linear_mix",
+    "gated",
+    "adversarial",
 })
 
 # ──────────────────────────────────────────────────────────────────────
@@ -149,8 +166,11 @@ def validate_score_matrix(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFr
 
     Returns
     -------
-    pd.DataFrame  — same data, columns cast to canonical dtypes.
+    pd.DataFrame  — a copy with columns cast to canonical dtypes.
     """
+    # A2: Always work on a copy so the caller's DataFrame is not mutated
+    df = df.copy()
+
     _check_columns(df, SCORE_MATRIX_COLUMNS, "ScoreMatrix")
     _check_no_empty_keys(df, ["query_id", "doc_id"], "ScoreMatrix")
 
@@ -172,6 +192,9 @@ def validate_score_matrix(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFr
 
 def validate_attribution(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFrame:
     """Validate an attribution-result DataFrame."""
+    # A2: Always work on a copy
+    df = df.copy()
+
     _check_columns(df, ATTRIBUTION_COLUMNS, "Attribution")
     _check_no_empty_keys(df, ["query_id", "doc_id", "method_name"], "Attribution")
 
@@ -200,6 +223,9 @@ def validate_attribution(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFra
 
 def validate_intervention(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFrame:
     """Validate an intervention-result DataFrame."""
+    # A2: Always work on a copy
+    df = df.copy()
+
     _check_columns(df, INTERVENTION_COLUMNS, "Intervention")
     _check_no_empty_keys(
         df, ["query_id", "doc_id", "intervention_type"], "Intervention"
@@ -231,22 +257,59 @@ def validate_intervention(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFr
     return df
 
 
+def validate_synthetic_gt(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFrame:
+    """Validate a synthetic ground-truth DataFrame."""
+    # Q4: New validator for synthetic ground truth
+    df = df.copy()
+
+    _check_columns(df, SYNTHETIC_GT_COLUMNS, "SyntheticGT")
+    _check_no_empty_keys(df, ["query_id", "doc_id", "setting"], "SyntheticGT")
+
+    _cast_columns(df, SYNTHETIC_GT_COLUMNS, "SyntheticGT")
+
+    if strict:
+        bad_settings = set(df["setting"].unique()) - VALID_SETTINGS
+        if bad_settings:
+            raise SchemaError(
+                f"SyntheticGT: unknown setting(s) {bad_settings}. "
+                f"Allowed: {sorted(VALID_SETTINGS)}"
+            )
+
+        # true_stage_1_attribution must be in [0, 1]
+        vals = df["true_stage_1_attribution"].dropna()
+        if len(vals) > 0 and ((vals < 0) | (vals > 1)).any():
+            raise SchemaError(
+                "SyntheticGT: true_stage_1_attribution must be in [0, 1]"
+            )
+
+        # alpha must be in [0, 1]
+        alphas = df["alpha"].dropna()
+        if len(alphas) > 0 and ((alphas < 0) | (alphas > 1)).any():
+            raise SchemaError(
+                "SyntheticGT: alpha must be in [0, 1]"
+            )
+
+    return df
+
+
 # ──────────────────────────────────────────────────────────────────────
 # 3. Factory helpers
 # ──────────────────────────────────────────────────────────────────────
 
-TableKind = Literal["score_matrix", "attribution", "intervention"]
+TableKind = Literal["score_matrix", "attribution", "intervention", "synthetic_gt"]
 
 _SCHEMA_MAP: dict[TableKind, dict[str, str]] = {
     "score_matrix":  SCORE_MATRIX_COLUMNS,
     "attribution":   ATTRIBUTION_COLUMNS,
     "intervention":  INTERVENTION_COLUMNS,
+    "synthetic_gt":  SYNTHETIC_GT_COLUMNS,
 }
 
 _VALIDATOR_MAP = {
     "score_matrix":  validate_score_matrix,
     "attribution":   validate_attribution,
     "intervention":  validate_intervention,
+    "synthetic_gt":  validate_synthetic_gt,
 }
 
 
@@ -266,6 +329,10 @@ def new_attribution() -> pd.DataFrame:
 
 def new_intervention() -> pd.DataFrame:
     return new_dataframe("intervention")
+
+
+def new_synthetic_gt() -> pd.DataFrame:
+    return new_dataframe("synthetic_gt")
 
 
 # ──────────────────────────────────────────────────────────────────────

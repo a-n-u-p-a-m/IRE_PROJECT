@@ -37,6 +37,7 @@ from shared.schema import (
     ATTRIBUTION_COLUMNS,
     INTERVENTION_COLUMNS,
     SCORE_MATRIX_COLUMNS,
+    SYNTHETIC_GT_COLUMNS,
     save_parquet,
     TableKind,
 )
@@ -197,6 +198,10 @@ class InterventionLogger(_BaseLogger):
     """
     Accumulate intervention results.
 
+    Displacement convention: rank_after − rank_before.
+      - Positive displacement means the document's rank worsened (moved down).
+      - Negative displacement means the document's rank improved (moved up).
+
     Example
     -------
     >>> log = InterventionLogger()
@@ -204,6 +209,7 @@ class InterventionLogger(_BaseLogger):
     ...     query_id="1", doc_id="d1",
     ...     intervention_type="remove_stage2",
     ...     rank_before=3, rank_after=15,
+    ...     seed=42,
     ... )
     """
 
@@ -218,6 +224,7 @@ class InterventionLogger(_BaseLogger):
         intervention_type: str,
         rank_before: int,
         rank_after: int,
+        seed: int | None = None,
         displacement: int | None = None,
     ) -> None:
         """Add one intervention row. Displacement is auto-computed if omitted."""
@@ -228,7 +235,44 @@ class InterventionLogger(_BaseLogger):
             query_id=query_id,
             doc_id=doc_id,
             intervention_type=intervention_type,
+            seed=seed,
             rank_before=rank_before,
             rank_after=rank_after,
             displacement=displacement,
+        )
+
+
+class SyntheticGTLogger(_BaseLogger):
+    """
+    Accumulate synthetic ground-truth rows.
+
+    Example
+    -------
+    >>> log = SyntheticGTLogger()
+    >>> log.add(
+    ...     query_id="1", doc_id="d1",
+    ...     true_stage_1_attribution=0.7,
+    ...     setting="linear_mix", alpha=0.7,
+    ... )
+    """
+
+    _kind: TableKind = "synthetic_gt"
+    _columns = SYNTHETIC_GT_COLUMNS
+
+    def add(
+        self,
+        *,
+        query_id: str,
+        doc_id: str,
+        true_stage_1_attribution: float,
+        setting: str,
+        alpha: float,
+    ) -> None:
+        """Add one synthetic ground-truth row."""
+        self._add(
+            query_id=query_id,
+            doc_id=doc_id,
+            true_stage_1_attribution=true_stage_1_attribution,
+            setting=setting,
+            alpha=alpha,
         )

@@ -7,9 +7,10 @@ No one reimplements metrics separately.
 Metrics fall into two groups:
 
   1. **Synthetic evaluation** — comparing attribution predictions against
-     planted ground-truth α values.
+     planted ground-truth α values (per-document).
   2. **Real-data evaluation** — comparing attribution predictions against
-     observed intervention displacements.
+     observed intervention displacements, with correct stage-intervention
+     pairing.
 
 Both groups include bootstrap 95% CIs (resampling queries, 1000 iterations).
 
@@ -172,15 +173,17 @@ def rank_correlation(
     Spearman ρ between predicted per-document stage_1_attribution
     and true per-document contribution.
 
-    Returns 0.0 if all values are identical (no variance).
+    Returns NaN if all values in either array are identical (no variance),
+    since rank correlation is undefined for constant inputs.
     """
     predicted = np.asarray(predicted, dtype=float)
     ground_truth = np.asarray(ground_truth, dtype=float)
 
     if len(predicted) < 2:
-        return 0.0
+        return float("nan")
+    # E8: Return NaN for constant input instead of 0.0 which biases averages
     if np.std(predicted) == 0 or np.std(ground_truth) == 0:
-        return 0.0
+        return float("nan")
 
     rho, _ = scipy_stats.spearmanr(predicted, ground_truth)
     return float(rho)
@@ -264,47 +267,40 @@ def comprehensiveness(
     attribution_df: pd.DataFrame,
     intervention_df: pd.DataFrame,
     top_k: int = 10,
-) -> float:
+) -> dict[str, float]:
     """
     Fraction of documents where removing the attributed-as-important stage
     causes displacement > median displacement.
+
+    E5/E7 fix: computes per-intervention-type median and returns per-query
+    values (with bootstrap CI) rather than a single pooled float.
 
     Process:
     1. For each document, determine which stage is attributed as more
        important (stage_1_attribution > 0.5 → stage 1 is dominant).
     2. Look up the intervention that removes that stage.
-    3. Check if the resulting displacement exceeds the median.
+    3. Check if the resulting displacement exceeds the per-type median.
 
-    Parameters
-    ----------
-    attribution_df : DataFrame
-        Must follow the attribution schema.
-    intervention_df : DataFrame
-        Must follow the intervention schema.
-    top_k : int
-        Only consider documents in the top-K of the full pipeline.
+    Returns dict[query_id → comprehensiveness score]
     """
+    # E5: Compute per-intervention-type median displacement
+    median_by_type: dict[str, float] = {}
+    for itype, igroup in intervention_df.groupby("intervention_type"):
+        median_by_type[str(itype)] = float(igroup["displacement"].abs().median())
+
     # Build lookup: (query_id, doc_id, intervention_type) → displacement
     interv_lookup: dict[tuple[str, str, str], int] = {}
     for _, row in intervention_df.iterrows():
         key = (row["query_id"], row["doc_id"], row["intervention_type"])
         interv_lookup[key] = row["displacement"]
 
-    # Median displacement across all interventions
-    all_displacements = intervention_df["displacement"].abs()
-    median_disp = float(all_displacements.median())
-
-    hits = 0
-    total = 0
+    # E7: Compute per-query to enable bootstrap CI
+    per_query_hits: dict[str, int] = defaultdict(int)
+    per_query_total: dict[str, int] = defaultdict(int)
 
     for _, row in attribution_df.iterrows():
-        # Determine which stage is attributed as more important
+        qid = str(row["query_id"])
         if row["stage_1_attribution"] > 0.5:
-            # Stage 1 is dominant → check remove_stage2 (should cause LESS
-            # displacement) — actually, check what happens when we remove
-            # the dominant stage's contribution.
-            # remove_stage2 tests Stage 2's importance.
-            # To test Stage 1's importance, we use randomize_stage1_scores.
             interv_type = "randomize_stage1_scores"
         else:
             interv_type = "remove_stage2"
@@ -314,21 +310,29 @@ def comprehensiveness(
             continue
 
         displacement = abs(interv_lookup[key])
-        total += 1
+        median_disp = median_by_type.get(interv_type, 0.0)
+        per_query_total[qid] += 1
         if displacement > median_disp:
-            hits += 1
+            per_query_hits[qid] += 1
 
-    return hits / total if total > 0 else 0.0
+    result: dict[str, float] = {}
+    for qid in per_query_total:
+        result[qid] = per_query_hits[qid] / per_query_total[qid] if per_query_total[qid] > 0 else 0.0
+
+    return result
 
 
 def sufficiency(
     attribution_df: pd.DataFrame,
     intervention_df: pd.DataFrame,
     top_k: int = 10,
-) -> float:
+) -> dict[str, float]:
     """
     Fraction of documents where keeping ONLY the attributed-as-important
     stage preserves the document in top-K.
+
+    E7 fix: returns per-query values (dict[query_id → score]) to enable
+    bootstrap CI.
 
     If stage_1_attribution > 0.5 (Stage 1 is dominant), check the
     remove_stage2 intervention: if the document stays in top-K even
@@ -339,10 +343,11 @@ def sufficiency(
         key = (row["query_id"], row["doc_id"], row["intervention_type"])
         interv_lookup[key] = row["rank_after"]
 
-    hits = 0
-    total = 0
+    per_query_hits: dict[str, int] = defaultdict(int)
+    per_query_total: dict[str, int] = defaultdict(int)
 
     for _, row in attribution_df.iterrows():
+        qid = str(row["query_id"])
         if row["stage_1_attribution"] > 0.5:
             # Stage 1 dominant → keep Stage 1 only → remove_stage2
             interv_type = "remove_stage2"
@@ -357,29 +362,43 @@ def sufficiency(
             continue
 
         rank_after = interv_lookup[key]
-        total += 1
+        per_query_total[qid] += 1
         if rank_after <= top_k:
-            hits += 1
+            per_query_hits[qid] += 1
 
-    return hits / total if total > 0 else 0.0
+    result: dict[str, float] = {}
+    for qid in per_query_total:
+        result[qid] = per_query_hits[qid] / per_query_total[qid] if per_query_total[qid] > 0 else 0.0
+
+    return result
 
 
 def recovery_error(
     predicted_attribution: np.ndarray,
     observed_displacement: np.ndarray,
+    max_possible_displacement: int,
 ) -> float:
     """
     Mean |predicted_attribution − normalized_displacement|.
 
-    Normalizes displacement to [0, 1] before comparison.
+    E6 fix: Normalizes displacement by max_possible_displacement (e.g.
+    corpus_size or top_k) instead of max observed in the sample, which
+    would be scale-dependent.
+
+    Parameters
+    ----------
+    predicted_attribution : array-like
+        Predicted attribution values in [0, 1].
+    observed_displacement : array-like
+        Observed rank displacements (positive = worsened).
+    max_possible_displacement : int
+        The theoretical maximum displacement (e.g. top_k or corpus_size).
     """
     predicted = np.asarray(predicted_attribution, dtype=float)
     displacement = np.abs(np.asarray(observed_displacement, dtype=float))
 
-    # Normalize displacement to [0, 1]
-    d_max = displacement.max()
-    if d_max > 0:
-        norm_disp = displacement / d_max
+    if max_possible_displacement > 0:
+        norm_disp = displacement / max_possible_displacement
     else:
         norm_disp = displacement
 
@@ -403,6 +422,7 @@ def bootstrap_ci(
     ----------
     values_by_query : dict[str, float]
         query_id → metric value for that query.
+        NaN values are excluded before bootstrapping.
     n_iterations : int
         Number of bootstrap iterations.
     ci : float
@@ -415,12 +435,16 @@ def bootstrap_ci(
     dict with keys: mean, std, ci_low, ci_high, n_queries
     """
     rng = np.random.RandomState(seed)
-    query_ids = list(values_by_query.keys())
+
+    # E8: Filter out NaN values before bootstrapping
+    query_ids = [q for q, v in values_by_query.items() if not np.isnan(v)]
     values = np.array([values_by_query[q] for q in query_ids])
     n = len(values)
 
     if n == 0:
-        return {"mean": 0.0, "std": 0.0, "ci_low": 0.0, "ci_high": 0.0, "n_queries": 0}
+        return {"mean": float("nan"), "std": float("nan"),
+                "ci_low": float("nan"), "ci_high": float("nan"),
+                "n_queries": 0}
 
     bootstrap_means: list[float] = []
     for _ in range(n_iterations):
@@ -445,18 +469,30 @@ def bootstrap_ci(
 
 def evaluate_all_synthetic(
     attribution_df: pd.DataFrame,
-    true_alphas: dict[str, float] | float,
+    synthetic_gt_df: pd.DataFrame | None = None,
+    true_alphas: dict[str, float] | float | None = None,
     method_name: str | None = None,
 ) -> dict[str, dict]:
     """
     Run all synthetic metrics on an attribution DataFrame.
 
+    E1 fix: Uses per-document ground truth from synthetic_gt_df for
+    rank_correlation instead of comparing against a constant array.
+
+    E3 fix: Also computes calibration_error.
+
+    E4 fix: Raises ValueError if no ground truth is provided.
+
     Parameters
     ----------
     attribution_df : DataFrame
         Attribution results (must follow schema).
-    true_alphas : float or dict[query_id → float]
-        The planted ground-truth α.
+    synthetic_gt_df : DataFrame, optional
+        Per-document ground truth (from SyntheticGTLogger). If provided,
+        rank_correlation uses per-document true_stage_1_attribution.
+    true_alphas : float or dict[query_id → float], optional
+        The planted ground-truth α. Used for attribution_error and
+        calibration_error when synthetic_gt_df is not available.
     method_name : str, optional
         Filter to this method only. If None, evaluate per-method.
 
@@ -464,10 +500,23 @@ def evaluate_all_synthetic(
     -------
     dict[method_name → {metric_name → {mean, ci_low, ci_high, ...}}]
     """
+    # E4: Require ground truth
+    if synthetic_gt_df is None and true_alphas is None:
+        raise ValueError(
+            "evaluate_all_synthetic requires either synthetic_gt_df or "
+            "true_alphas. Provide ground truth explicitly."
+        )
+
     if method_name:
         attribution_df = attribution_df[
             attribution_df["method_name"] == method_name
         ]
+
+    # Build per-document ground truth lookup if available
+    gt_lookup: dict[tuple[str, str], float] = {}
+    if synthetic_gt_df is not None:
+        for _, row in synthetic_gt_df.iterrows():
+            gt_lookup[(str(row["query_id"]), str(row["doc_id"]))] = row["true_stage_1_attribution"]
 
     results: dict[str, dict] = {}
 
@@ -475,28 +524,74 @@ def evaluate_all_synthetic(
         mname = str(mname)
         per_query_error: dict[str, float] = {}
         per_query_corr: dict[str, float] = {}
+        all_predicted: list[float] = []
+        all_true: list[float] = []
 
         for qid, qgroup in mgroup.groupby("query_id"):
             qid = str(qid)
             predicted = qgroup["stage_1_attribution"].values
 
+            # Get scalar alpha for this query (for attribution_error)
             if isinstance(true_alphas, dict):
-                alpha = true_alphas.get(qid, 0.5)
-            else:
+                alpha = true_alphas.get(qid)
+                if alpha is None:
+                    # E4: Skip queries without ground truth
+                    continue
+            elif true_alphas is not None:
                 alpha = true_alphas
+            elif synthetic_gt_df is not None:
+                # Infer alpha from synthetic_gt_df
+                qt_rows = synthetic_gt_df[synthetic_gt_df["query_id"] == qid]
+                if qt_rows.empty:
+                    continue
+                alpha = float(qt_rows["alpha"].iloc[0])
+            else:
+                continue
 
             per_query_error[qid] = attribution_error(predicted, alpha)
 
-            # For rank correlation, need per-document ground truth
-            true_arr = np.full_like(predicted, alpha)
-            per_query_corr[qid] = rank_correlation(predicted, true_arr)
+            # E1 fix: Use per-document ground truth for rank_correlation
+            if gt_lookup:
+                true_per_doc = np.array([
+                    gt_lookup.get((qid, str(row["doc_id"])), alpha)
+                    for _, row in qgroup.iterrows()
+                ])
+            else:
+                # Fallback: constant alpha (rank_correlation will be NaN)
+                true_per_doc = np.full_like(predicted, alpha)
 
-        results[mname] = {
+            per_query_corr[qid] = rank_correlation(predicted, true_per_doc)
+
+            # Accumulate for calibration_error
+            all_predicted.extend(predicted.tolist())
+            all_true.extend(
+                [gt_lookup.get((qid, str(row["doc_id"])), alpha) for _, row in qgroup.iterrows()]
+                if gt_lookup else [alpha] * len(predicted)
+            )
+
+        method_results: dict[str, any] = {
             "attribution_error": bootstrap_ci(per_query_error),
             "rank_correlation": bootstrap_ci(per_query_corr),
         }
 
+        # E3 fix: compute calibration_error
+        if all_predicted and all_true:
+            cal_err, cal_bins = calibration_error(
+                np.array(all_predicted), np.array(all_true)
+            )
+            method_results["calibration_error"] = cal_err
+            method_results["calibration_bins"] = cal_bins
+
+        results[mname] = method_results
+
     return results
+
+
+# E2 fix: Stage-intervention pairing map
+_STAGE_INTERVENTION_MAP = {
+    "stage_1_attribution": "randomize_stage1_scores",
+    "stage_2_attribution": "remove_stage2",
+}
 
 
 def evaluate_all_real(
@@ -508,6 +603,15 @@ def evaluate_all_real(
     """
     Run all real-data metrics on attribution + intervention DataFrames.
 
+    E2 fix: Pairs stage_1_attribution with randomize_stage1_scores
+    interventions and stage_2_attribution with remove_stage2, instead
+    of merging all intervention types together.
+
+    E6 fix: Also computes recovery_error per query.
+
+    E7 fix: comprehensiveness and sufficiency now return per-query
+    dicts and get bootstrap CI.
+
     Returns
     -------
     dict[method_name → {metric_name → {mean, ci_low, ci_high, ...}}]
@@ -522,37 +626,72 @@ def evaluate_all_real(
     for mname, mgroup in attribution_df.groupby("method_name"):
         mname = str(mname)
 
-        # Displacement correlation (per-query)
-        per_query_disp_corr: dict[str, float] = {}
+        # ── E2 fix: per-stage displacement correlation ──
+        per_query_disp_corr_s1: dict[str, float] = {}
+        per_query_disp_corr_s2: dict[str, float] = {}
+        per_query_recovery: dict[str, float] = {}
 
         for qid, qg in mgroup.groupby("query_id"):
             qid = str(qid)
-            q_interventions = intervention_df[
-                intervention_df["query_id"] == qid
+
+            # Stage 1 attribution ↔ randomize_stage1_scores displacement
+            s1_interventions = intervention_df[
+                (intervention_df["query_id"] == qid) &
+                (intervention_df["intervention_type"] == "randomize_stage1_scores")
             ]
+            if not s1_interventions.empty:
+                merged_s1 = qg.merge(
+                    s1_interventions[["doc_id", "displacement"]],
+                    on="doc_id",
+                    how="inner",
+                )
+                if len(merged_s1) >= 2:
+                    per_query_disp_corr_s1[qid] = displacement_correlation(
+                        merged_s1["stage_1_attribution"].values,
+                        merged_s1["displacement"].values,
+                    )
 
-            if q_interventions.empty:
-                continue
+            # Stage 2 attribution ↔ remove_stage2 displacement
+            s2_interventions = intervention_df[
+                (intervention_df["query_id"] == qid) &
+                (intervention_df["intervention_type"] == "remove_stage2")
+            ]
+            if not s2_interventions.empty:
+                merged_s2 = qg.merge(
+                    s2_interventions[["doc_id", "displacement"]],
+                    on="doc_id",
+                    how="inner",
+                )
+                if len(merged_s2) >= 2:
+                    per_query_disp_corr_s2[qid] = displacement_correlation(
+                        merged_s2["stage_2_attribution"].values,
+                        merged_s2["displacement"].values,
+                    )
 
-            # Merge attributions with interventions on doc_id
-            merged = qg.merge(
-                q_interventions[["doc_id", "displacement"]],
-                on="doc_id",
-                how="inner",
-            )
+            # E6 fix: recovery_error per query (using stage_1 + randomize)
+            if not s1_interventions.empty:
+                merged_rec = qg.merge(
+                    s1_interventions[["doc_id", "displacement"]],
+                    on="doc_id",
+                    how="inner",
+                )
+                if len(merged_rec) >= 1:
+                    per_query_recovery[qid] = recovery_error(
+                        merged_rec["stage_1_attribution"].values,
+                        merged_rec["displacement"].values,
+                        max_possible_displacement=top_k,
+                    )
 
-            if len(merged) < 2:
-                continue
-
-            per_query_disp_corr[qid] = displacement_correlation(
-                merged["stage_1_attribution"].values,
-                merged["displacement"].values,
-            )
+        # E7 fix: comprehensiveness / sufficiency with per-query values + CI
+        comp_per_query = comprehensiveness(mgroup, intervention_df, top_k)
+        suff_per_query = sufficiency(mgroup, intervention_df, top_k)
 
         results[mname] = {
-            "displacement_correlation": bootstrap_ci(per_query_disp_corr),
-            "comprehensiveness": comprehensiveness(mgroup, intervention_df, top_k),
-            "sufficiency": sufficiency(mgroup, intervention_df, top_k),
+            "displacement_correlation_stage1": bootstrap_ci(per_query_disp_corr_s1),
+            "displacement_correlation_stage2": bootstrap_ci(per_query_disp_corr_s2),
+            "comprehensiveness": bootstrap_ci(comp_per_query),
+            "sufficiency": bootstrap_ci(suff_per_query),
+            "recovery_error": bootstrap_ci(per_query_recovery),
         }
 
     return results
@@ -573,12 +712,18 @@ def print_results(results: dict[str, dict], title: str = "Results") -> None:
         print(f"  {'-'*40}")
         for metric_name, value in sorted(metrics.items()):
             if isinstance(value, dict) and "mean" in value:
-                print(
-                    f"    {metric_name:30s}  "
-                    f"{value['mean']:.4f}  "
-                    f"[{value.get('ci_low', 0):.4f}, "
-                    f"{value.get('ci_high', 0):.4f}]"
-                )
-            else:
-                print(f"    {metric_name:30s}  {value:.4f}")
+                mean_val = value['mean']
+                ci_lo = value.get('ci_low', 0)
+                ci_hi = value.get('ci_high', 0)
+                if np.isnan(mean_val):
+                    print(f"    {metric_name:35s}  NaN  (no data)")
+                else:
+                    print(
+                        f"    {metric_name:35s}  "
+                        f"{mean_val:.4f}  "
+                        f"[{ci_lo:.4f}, {ci_hi:.4f}]"
+                    )
+            elif isinstance(value, (int, float)):
+                print(f"    {metric_name:35s}  {value:.4f}")
+            # Skip non-numeric values like calibration_bins
     print()

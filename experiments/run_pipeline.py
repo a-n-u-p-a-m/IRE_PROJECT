@@ -27,7 +27,8 @@ from shared.evaluation import compute_ndcg_from_score_matrix, bootstrap_ci
 from shared.logger import ScoreLogger
 from shared.reranker import Reranker, RerankerConfig
 from shared.schema import save_parquet
-from shared.utils import load_config, set_global_seed, setup_logging, Timer, TOP_K_DEFAULT
+from shared.utils import load_config, set_global_seed, setup_logging, Timer, TOP_K_DEFAULT, pad_to_k
+
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ def run_pipeline(
     skip_reranker: bool = False,
     output_path: str | None = None,
     max_queries: int | None = None,
+    max_passages: int | None = None,
 ) -> Path:
     """
     Run the full Stage 1 → Stage 2 pipeline.
@@ -95,6 +97,10 @@ def run_pipeline(
         Override output Parquet path
     max_queries : int, optional
         Process only N queries (for debugging)
+    max_passages : int, optional
+        U1 fix: Load only the first N passages from corpus (for debugging).
+        Full corpus is ~8.8M passages and consumes several GB RAM.
+        Use None (default) for production runs.
 
     Returns
     -------
@@ -111,8 +117,9 @@ def run_pipeline(
     set_global_seed(base_config.get("seed", 42))
 
     # ── Load data ──
+    # U1 fix: pass max_passages to avoid loading entire 8.8M corpus in dev
     t.start("load_corpus")
-    corpus = load_corpus()
+    corpus = load_corpus(max_passages=max_passages)
     t.stop("load_corpus")
 
     t.start("load_queries")
@@ -125,11 +132,12 @@ def run_pipeline(
         queries = {qid: queries[qid] for qid in query_ids}
 
     logger.info(
-        "Pipeline: %s retriever, %s queries, top_k=%d, reranker=%s",
+        "Pipeline: %s retriever, %s queries, top_k=%d, reranker=%s, corpus_size=%d",
         retriever_name,
         query_set,
         top_k,
         "OFF" if skip_reranker else "MiniLM",
+        len(corpus),
     )
 
     # ── Initialize retriever ──
@@ -155,13 +163,19 @@ def run_pipeline(
         stage1_results = retriever.search(query_text, k=top_k)
         t.stop("retrieval")
 
+        # U2 fix: Pad to top_k if retriever returned fewer results
+        stage1_results = pad_to_k(stage1_results, k=top_k)
+
         # Build candidate list
         candidates = []
         for rank, (doc_id, score) in enumerate(stage1_results, start=1):
+            is_pad = doc_id.startswith("__PAD_")
             candidates.append({
                 "doc_id": doc_id,
                 "stage_1_rank": rank,
                 "stage_1_score": score,
+                # U2 fix: pad entries and entries beyond top_k are not in candidate set
+                "in_candidate_set": not is_pad,
             })
 
         if skip_reranker:
@@ -172,17 +186,18 @@ def run_pipeline(
                     doc_id=cand["doc_id"],
                     stage_1_rank=cand["stage_1_rank"],
                     stage_1_score=cand["stage_1_score"],
-                    in_candidate_set=True,
+                    in_candidate_set=cand["in_candidate_set"],
                     stage_2_rank=cand["stage_1_rank"],
                     stage_2_score=cand["stage_1_score"],
                     final_rank=cand["stage_1_rank"],
                 )
         else:
-            # Stage 2: Rerank
+            # Stage 2: Rerank (only real candidates, not pads)
             t.start("reranking")
             rerank_pairs = [
                 (cand["doc_id"], corpus.get(cand["doc_id"], ""))
                 for cand in candidates
+                if cand["in_candidate_set"]
             ]
             reranked = reranker.rerank(query_text, rerank_pairs)
             t.stop("reranking")
@@ -199,7 +214,7 @@ def run_pipeline(
                     doc_id=did,
                     stage_1_rank=cand["stage_1_rank"],
                     stage_1_score=cand["stage_1_score"],
-                    in_candidate_set=True,
+                    in_candidate_set=cand["in_candidate_set"],
                     stage_2_rank=rdoc.rank if rdoc else None,
                     stage_2_score=rdoc.score if rdoc else None,
                     final_rank=rdoc.rank if rdoc else cand["stage_1_rank"],
@@ -291,6 +306,10 @@ def main():
         "--max-queries", type=int, default=None,
         help="Process only N queries (for debugging)",
     )
+    parser.add_argument(
+        "--max-passages", type=int, default=None,
+        help="Load only first N corpus passages (saves RAM during debugging)",
+    )
 
     args = parser.parse_args()
 
@@ -303,6 +322,7 @@ def main():
         skip_reranker=args.no_reranker,
         output_path=args.output,
         max_queries=args.max_queries,
+        max_passages=args.max_passages,
     )
 
 
