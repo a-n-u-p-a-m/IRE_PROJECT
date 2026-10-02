@@ -1,0 +1,21 @@
+# bm25.yaml — BM25 retriever configuration (Anupam)
+
+retriever:
+  name: bm25
+  implementation: pyserini
+
+  # Pyserini defaults for MS MARCO
+  index_params:
+    k1: 0.82
+    b: 0.68
+    # These are Pyserini's tuned defaults for MS MARCO Passage v1
+    # Reference: https://github.com/castorini/pyserini/blob/master/docs/experiments-msmarco-passage.md
+
+  search_params:
+    k1: 0.82
+    b: 0.68
+    hits: 1000     # Must match candidate_set_k in base.yaml
+
+# Expected baseline nDCG@10 on TREC-DL 2019: 0.50–0.52
+# If your number is outside this range, debug before proceeding.
+expected_ndcg10_range: [0.50, 0.52]

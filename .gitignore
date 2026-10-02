@@ -1,0 +1,22 @@
+# Large artifacts — never commit (see roadmap §1.10 git rules)
+results/
+data/
+indexes/
+*.parquet
+*.faiss
+*.bin
+*.pt
+*.safetensors
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
