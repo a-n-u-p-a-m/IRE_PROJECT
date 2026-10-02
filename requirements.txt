@@ -1,5 +1,9 @@
 # U3 fix: Pin exact versions for reproducibility across team members.
 # To upgrade, change the version here and re-run: pip install -r requirements.txt
+#
+# Supported Python: 3.10, 3.11, 3.12 (Colab currently ships 3.12).
+# Verified to resolve from prebuilt wheels on Linux x86_64 and macOS arm64.
+# Pyserini also needs a Java JDK on PATH (JDK 11 for pyserini 0.22.x).
 
 # Core
 pandas==2.2.0
@@ -10,12 +14,12 @@ scikit-learn==1.4.0
 
 # IR / Retrieval
 pyserini==0.22.1
-faiss-cpu==1.7.4
+faiss-cpu==1.8.0      # 1.7.4 has no Python 3.12 wheels
 
 # Transformers / Reranking
 sentence-transformers==2.3.1
 transformers==4.37.2
-torch==2.1.2
+torch==2.2.2          # 2.1.x has no Python 3.12 wheels
 
 # Config
 pyyaml==6.0.1

@@ -180,7 +180,7 @@ Interventions generate the empirical ground truth. Must be identical across pipe
 
 | Intervention | Exact Procedure |
 |---|---|
-| Remove Stage 2 | Final ranking = Stage 1 ranking. Displacement = final_rank_full_pipeline − stage_1_rank |
+| Remove Stage 2 | Final ranking = Stage 1 ranking. Displacement = stage_1_rank − final_rank_full_pipeline (i.e. rank_after − rank_before; positive = document moved down) |
 | Randomize Stage 1 scores | Keep same candidate set (top-1000). Replace stage_1_scores with uniform random. Re-run Stage 2. Compute displacement |
 | Remove gating | Expand Stage 2 input to top-5000 (or full corpus if feasible). Re-run Stage 2. Documents in top-K only with gating → Stage 1's gating was critical |
 

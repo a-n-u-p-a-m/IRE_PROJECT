@@ -153,6 +153,7 @@ def run_pipeline(
 
     # ── Run pipeline ──
     score_log = ScoreLogger()
+    n_missing_text = 0
 
     for i, (qid, query_text) in enumerate(queries.items()):
         if (i + 1) % 10 == 0 or i == 0:
@@ -199,6 +200,9 @@ def run_pipeline(
                 for cand in candidates
                 if cand["in_candidate_set"]
             ]
+            # Candidates outside a --max-passages corpus get empty text, so
+            # their reranker scores (and the resulting nDCG) are meaningless
+            n_missing_text += sum(1 for did, _ in rerank_pairs if did not in corpus)
             reranked = reranker.rerank(query_text, rerank_pairs)
             t.stop("reranking")
 
@@ -219,6 +223,14 @@ def run_pipeline(
                     stage_2_score=rdoc.score if rdoc else None,
                     final_rank=rdoc.rank if rdoc else cand["stage_1_rank"],
                 )
+
+    if n_missing_text:
+        logger.warning(
+            "⚠  %d reranked candidates had no passage text (corpus limited to "
+            "%s passages); they were scored on empty text. Do not use this "
+            "run's nDCG or score matrix for experiments.",
+            n_missing_text, max_passages if max_passages else len(corpus),
+        )
 
     # ── Attach relevance labels ──
     df = score_log.to_dataframe(strict=False)
@@ -308,7 +320,7 @@ def main():
     )
     parser.add_argument(
         "--max-passages", type=int, default=None,
-        help="Load only first N corpus passages (saves RAM during debugging)",
+        help="Load only first N corpus passages (debugging only: candidates outside them are reranked on empty text)",
     )
 
     args = parser.parse_args()
