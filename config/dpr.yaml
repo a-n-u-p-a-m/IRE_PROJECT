@@ -1,0 +1,28 @@
+# dpr.yaml — Dense retriever configuration (Shubham)
+
+retriever:
+  name: dpr
+  implementation: retrievers/dpr.py   # exact search over float16 embedding shards
+
+  # DPR architecture (BERT-base bi-encoder, [CLS] -> linear -> L2 norm)
+  # trained on MS MARCO.  The original NQ-trained DPR (Karpukhin et al.) is
+  # out-of-domain on MS MARCO and has no published TREC-DL baseline to verify
+  # against, so we use cosDPR-distil, which Pyserini reproduces.
+  # Reference: https://castorini.github.io/pyserini/2cr/msmarco-v1-passage.html
+  model_name: castorini/cosdpr-distil
+
+  # Built by:  python -m retrievers.dpr encode --index-dir <dir>
+  # ~13.5 GB of float16 shards.  $DPR_INDEX_DIR overrides this path.
+  index_dir: indexes/dpr_cosdpr_distil
+
+  # Passages are encoded with max_length 256 (Pyserini default; set at encode time)
+  query_max_length: null    # null = BERT max (512), as in Pyserini
+  hits: 1000                # Must match candidate_set_k in base.yaml
+  device: null              # null = auto (cuda > cpu)
+
+# Published Stage-1 numbers (Pyserini 2CR, "cosDPR-distil: Faiss flat, PyTorch"):
+#   TREC-DL19  nDCG@10 0.7250  R@1000 0.8201
+#   TREC-DL20  nDCG@10 0.7025  R@1000 0.8533
+# run_pipeline.py applies one range to every query set with a ±0.02 tolerance,
+# so this range spans both years.
+expected_ndcg10_range: [0.7025, 0.7250]

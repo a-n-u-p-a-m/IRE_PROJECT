@@ -44,6 +44,11 @@ def _get_retriever(name: str, config: dict):
     Each retriever must implement:
         .search(query: str, k: int) -> list[tuple[str, float]]
             Returns list of (doc_id, score), sorted by score descending.
+
+    and may optionally implement (used instead of .search when present):
+        .batch_search(queries: dict[str, str], k: int)
+            -> dict[str, list[tuple[str, float]]]
+            query_id → query text in, query_id → ranked (doc_id, score) out.
     """
     if name == "bm25":
         from retrievers.bm25 import BM25Retriever
@@ -152,6 +157,14 @@ def run_pipeline(
         reranker = Reranker(RerankerConfig(**reranker_cfg))
 
     # ── Run pipeline ──
+    # Retrievers that can search many queries in one pass (e.g. DPR's exact
+    # search over embedding shards) expose batch_search; run it up front.
+    batch_results = None
+    if hasattr(retriever, "batch_search"):
+        t.start("retrieval")
+        batch_results = retriever.batch_search(queries, k=top_k)
+        t.stop("retrieval")
+
     score_log = ScoreLogger()
     n_missing_text = 0
 
@@ -160,9 +173,12 @@ def run_pipeline(
             logger.info("Processing query %d/%d: %s", i + 1, len(queries), qid)
 
         # Stage 1: Retrieve
-        t.start("retrieval")
-        stage1_results = retriever.search(query_text, k=top_k)
-        t.stop("retrieval")
+        if batch_results is not None:
+            stage1_results = batch_results[qid]
+        else:
+            t.start("retrieval")
+            stage1_results = retriever.search(query_text, k=top_k)
+            t.stop("retrieval")
 
         # U2 fix: Pad to top_k if retriever returned fewer results
         stage1_results = pad_to_k(stage1_results, k=top_k)
@@ -255,10 +271,16 @@ def run_pipeline(
         ndcg_ci["n_queries"],
     )
 
-    # Check against expected range if available
+    # Check against expected range if available.  The range is a Stage-1
+    # (retriever-only) baseline, so it only applies to --no-reranker runs.
     if retriever_config:
         expected = retriever_config.get("expected_ndcg10_range")
-        if expected:
+        if expected and not skip_reranker:
+            logger.info(
+                "Skipping baseline check: expected_ndcg10_range is a Stage-1 "
+                "baseline; rerun with --no-reranker to verify the retriever."
+            )
+        elif expected:
             lo, hi = expected
             actual = ndcg_ci["mean"]
             if actual < lo - 0.02 or actual > hi + 0.02:

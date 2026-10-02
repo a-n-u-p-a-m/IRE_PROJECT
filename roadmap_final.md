@@ -129,7 +129,7 @@ Published baselines for reference (approximate nDCG@10 on TREC-DL 2019):
 | Retriever | Expected nDCG@10 (approx.) | Source |
 |---|---|---|
 | BM25 (Pyserini defaults) | 0.50–0.52 | Pyserini docs |
-| DPR | 0.45–0.48 | Karpukhin et al. |
+| DPR (cosDPR-distil: DPR architecture trained on MS MARCO) | 0.725 (DL20: 0.703) | Pyserini 2CR, Faiss flat |
 | ColBERTv2 | 0.68–0.71 | Santhanam et al. |
 | SPLADE v3 | 0.69–0.72 | Formal et al. |
 
