@@ -25,11 +25,12 @@ import csv
 import gzip
 import logging
 import os
+import shutil
 import tarfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Literal
-from urllib.request import urlretrieve
+from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,13 @@ def _download(url: str, dest: Path) -> Path:
         return dest
     dest.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Downloading %s → %s", url, dest)
-    urlretrieve(url, dest)
+    # trec.nist.gov returns 403 for urllib's default User-Agent
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    # Write to a temp file first so an interrupted download isn't cached
+    tmp = dest.with_name(dest.name + ".part")
+    with urlopen(req) as resp, open(tmp, "wb") as out:
+        shutil.copyfileobj(resp, out)
+    tmp.rename(dest)
     return dest
 
 
@@ -173,13 +180,20 @@ def _load_gzipped_tsv_queries(path: Path) -> dict[str, str]:
     return queries
 
 
-def load_queries(query_set: QuerySet = "dl19") -> dict[str, str]:
+def load_queries(
+    query_set: QuerySet = "dl19",
+    judged_only: bool = True,
+) -> dict[str, str]:
     """
     Load queries for a given evaluation set.
 
     Parameters
     ----------
     query_set : {"dl19", "dl20", "dev_small"}
+    judged_only : bool
+        The TREC-DL query files contain 200 queries each, but only 43 (DL19)
+        / 54 (DL20) have NIST judgments.  If True (default), keep only the
+        judged queries so every member evaluates on the same 43/54.
 
     Returns
     -------
@@ -203,6 +217,10 @@ def load_queries(query_set: QuerySet = "dl19") -> dict[str, str]:
 
     else:
         raise ValueError(f"Unknown query set: {query_set!r}")
+
+    if judged_only and query_set in ("dl19", "dl20"):
+        qrels = load_qrels(query_set)
+        queries = {qid: text for qid, text in queries.items() if qid in qrels}
 
     logger.info("Loaded %d queries for %s", len(queries), query_set)
     return queries

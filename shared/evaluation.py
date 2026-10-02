@@ -46,12 +46,17 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────
 
 def dcg(relevances: np.ndarray, k: int | None = None) -> float:
-    """Discounted Cumulative Gain at rank k."""
+    """
+    Discounted Cumulative Gain at rank k.
+
+    Uses linear gain (gain = relevance label), matching trec_eval's
+    ndcg_cut — the metric behind published Pyserini / TREC-DL baselines.
+    """
     if k is not None:
         relevances = relevances[:k]
     positions = np.arange(1, len(relevances) + 1)
     discounts = np.log2(positions + 1)
-    return float(np.sum((2**relevances - 1) / discounts))
+    return float(np.sum(relevances / discounts))
 
 
 def ndcg(
@@ -92,26 +97,39 @@ def ndcg(
 def compute_ndcg_from_score_matrix(
     score_df: pd.DataFrame,
     k: int = 10,
+    qrels: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, float]:
     """
     Compute nDCG@k for each query from a score matrix.
 
     Returns dict[query_id → nDCG@k].
     Requires 'final_rank' and 'relevance_label' columns.
+
+    Pass *qrels* to match trec_eval: the ideal ranking is then built from
+    ALL judged documents (including relevant ones Stage 1 never retrieved),
+    and queries without judgments are skipped.  Without qrels, the ideal
+    falls back to the labels present in the score matrix, which inflates
+    nDCG whenever relevant documents were missed.
     """
     results: dict[str, float] = {}
 
     for qid, group in score_df.groupby("query_id"):
+        qid = str(qid)
+        if qrels is not None and qid not in qrels:
+            continue
+
         # Sort by final rank
         sorted_g = group.sort_values("final_rank")
 
         # Get relevance labels in rank order (unjudged → 0)
         rels = sorted_g["relevance_label"].fillna(0).values.astype(float)
 
-        # Ideal: all qrel labels for this query (including docs not retrieved)
-        all_rels = group["relevance_label"].dropna().values.astype(float)
+        if qrels is not None:
+            all_rels = np.array(list(qrels[qid].values()), dtype=float)
+        else:
+            all_rels = group["relevance_label"].dropna().values.astype(float)
 
-        results[str(qid)] = ndcg(rels, k=k, ideal_relevances=all_rels)
+        results[qid] = ndcg(rels, k=k, ideal_relevances=all_rels)
 
     return results
 

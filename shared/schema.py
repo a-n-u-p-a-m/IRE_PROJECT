@@ -118,6 +118,23 @@ def _check_ranks_positive(df: pd.DataFrame, rank_cols: list[str], name: str) -> 
             )
 
 
+def _cast_columns(df: pd.DataFrame, expected: dict[str, str], name: str) -> None:
+    """Cast columns to canonical dtypes (lenient — allows int→Int64, NA→NaN, etc.)."""
+    for col, dtype in expected.items():
+        if col not in df.columns:
+            continue
+        try:
+            if dtype == "float64":
+                # pd.to_numeric maps pd.NA → NaN; a bare astype("float64") raises
+                df[col] = pd.to_numeric(df[col]).astype(dtype)
+            else:
+                df[col] = df[col].astype(dtype)
+        except (ValueError, TypeError) as exc:
+            raise SchemaError(
+                f"{name}: cannot cast column '{col}' to {dtype}: {exc}"
+            ) from exc
+
+
 def validate_score_matrix(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFrame:
     """
     Validate and coerce a score-matrix DataFrame.
@@ -137,15 +154,7 @@ def validate_score_matrix(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFr
     _check_columns(df, SCORE_MATRIX_COLUMNS, "ScoreMatrix")
     _check_no_empty_keys(df, ["query_id", "doc_id"], "ScoreMatrix")
 
-    # Cast to canonical dtypes (lenient — allows int→Int64, etc.)
-    for col, dtype in SCORE_MATRIX_COLUMNS.items():
-        if col in df.columns:
-            try:
-                df[col] = df[col].astype(dtype)
-            except (ValueError, TypeError) as exc:
-                raise SchemaError(
-                    f"ScoreMatrix: cannot cast column '{col}' to {dtype}: {exc}"
-                ) from exc
+    _cast_columns(df, SCORE_MATRIX_COLUMNS, "ScoreMatrix")
 
     if strict:
         dupes = df.duplicated(subset=["query_id", "doc_id"], keep=False)
@@ -166,14 +175,7 @@ def validate_attribution(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFra
     _check_columns(df, ATTRIBUTION_COLUMNS, "Attribution")
     _check_no_empty_keys(df, ["query_id", "doc_id", "method_name"], "Attribution")
 
-    for col, dtype in ATTRIBUTION_COLUMNS.items():
-        if col in df.columns:
-            try:
-                df[col] = df[col].astype(dtype)
-            except (ValueError, TypeError) as exc:
-                raise SchemaError(
-                    f"Attribution: cannot cast '{col}' to {dtype}: {exc}"
-                ) from exc
+    _cast_columns(df, ATTRIBUTION_COLUMNS, "Attribution")
 
     if strict:
         bad_methods = set(df["method_name"].unique()) - VALID_METHODS
@@ -203,14 +205,7 @@ def validate_intervention(df: pd.DataFrame, *, strict: bool = True) -> pd.DataFr
         df, ["query_id", "doc_id", "intervention_type"], "Intervention"
     )
 
-    for col, dtype in INTERVENTION_COLUMNS.items():
-        if col in df.columns:
-            try:
-                df[col] = df[col].astype(dtype)
-            except (ValueError, TypeError) as exc:
-                raise SchemaError(
-                    f"Intervention: cannot cast '{col}' to {dtype}: {exc}"
-                ) from exc
+    _cast_columns(df, INTERVENTION_COLUMNS, "Intervention")
 
     if strict:
         bad_types = set(df["intervention_type"].unique()) - VALID_INTERVENTIONS

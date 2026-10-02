@@ -218,7 +218,7 @@ def run_pipeline(
     logger.info("Saved score matrix to %s (%d rows)", out, len(df))
 
     # ── Verify baselines ──
-    ndcg_scores = compute_ndcg_from_score_matrix(df, k=10)
+    ndcg_scores = compute_ndcg_from_score_matrix(df, k=10, qrels=qrels)
     ndcg_ci = bootstrap_ci(ndcg_scores)
     logger.info(
         "nDCG@10 = %.4f [%.4f, %.4f]  (n=%d queries)",
