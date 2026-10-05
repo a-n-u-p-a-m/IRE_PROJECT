@@ -3,7 +3,7 @@
 **Project:** Intervention-Based Benchmark for Stage-Level Attribution in Multi-Stage Retrieval Pipelines
 **Course:** CS4.406 — Information Retrieval & Extraction
 **Team:** Anupam Dwivedi, Shubham Paliwal, Chaitanya K
-**Status as of:** 2026-10-05 — shared infrastructure complete, all verticals pending
+**Status as of:** 2026-10-05 — shared infrastructure complete through commit `eb6f207`, all verticals pending
 **Purpose of this document:** a plain-language explanation of what we are building and why, how the synthetic and real halves of the benchmark relate to each other, and a consolidated list of unresolved decisions to discuss with teammates and the supervisor.
 
 ---
@@ -145,11 +145,19 @@ That is the diagnostic loop: synthetic settings isolate individual failure modes
 
 ### The unit-mismatch wrinkle (worth stating in the report)
 
-The two sides do not share units. Synthetic yields a fraction in [0, 1]. Real yields displacement in rank positions — possibly 3, possibly 800.
+The two sides do not share units. Synthetic yields a fraction in [0, 1]. Real yields displacement in rank positions — possibly 3, possibly 800. Bridging them requires putting displacement onto the same scale as attribution.
 
-Bridging them requires squashing displacement into [0, 1], which is what `recovery_error` does: it divides measured displacement by the maximum displacement that was possible. This was one of the bugs caught in review — the original divided by the largest displacement *observed in the sample*, making results dependent on which queries happened to be in the batch. It now divides by an explicit stated maximum.
+As of `eb6f207`, `recovery_error` does this by comparing `stage_1_attribution` against **Stage 1's share of the total observed displacement**:
 
-This normalization is a reasonable convention, not a law of nature. Two methods that look equivalent under it could rank differently under a different squashing choice. Stating that plainly strengthens the benchmark's credibility rather than weakening it.
+```
+normalized_displacement = |d1| / (|d1| + |d2|)
+```
+
+where `d1` and `d2` are the displacements from the interventions that remove Stage 1 and Stage 2 respectively. Because attribution already satisfies `stage_1 + stage_2 = 1`, a *share* is the natural counterpart, and the error is guaranteed bounded in [0, 1]. Documents that neither intervention moved carry no signal and are skipped.
+
+This replaced two earlier attempts, both of which were unbounded: dividing by the largest displacement observed in the sample (made results depend on batch composition), then dividing by `top_k` (let the error reach values like 49.5).
+
+**This definition is a proposal, not settled.** The roadmap specifies "normalized displacement" without defining it, and Shubham flagged the share formulation explicitly as a team decision — see Doubt T10. Two methods that look equivalent under one normalization could rank differently under another, so whichever we adopt needs to be stated and justified in the report rather than left as an implementation detail.
 
 ---
 
@@ -188,7 +196,7 @@ The structure is **vertical slicing**: each member owns complete pipelines end-t
 
 ### Complete
 
-The shared infrastructure layer — nine files, on `main` as of commit `94561f7`.
+The shared infrastructure layer, on `main` as of commit `eb6f207`.
 
 - `shared/schema.py` — data contract for all four table types (score matrix, attribution, intervention, synthetic ground truth), with validators and Parquet I/O
 - `shared/evaluation.py` — all eight metrics plus bootstrap CI
@@ -197,10 +205,20 @@ The shared infrastructure layer — nine files, on `main` as of commit `94561f7`
 - `shared/data.py` — corpus, query and qrel loading
 - `shared/utils.py` — seeding, config, timing, top-K padding
 - `experiments/run_pipeline.py` — retriever → reranker → logger, with nDCG verification
-- `tests/test_schema_compliance.py` — 30 tests
+- `tests/test_schema_compliance.py` (30 tests) and `tests/test_evaluation.py` (17 tests) — 47 total
 - `config/base.yaml`, `config/bm25.yaml`, pinned `requirements.txt`
 
-Shubham reviewed all of it and raised 20 issues; all 20 are resolved. The eight evaluation bugs were the substantive ones — `rank_correlation` was being fed a constant array, intervention types were being merged across a bare `doc_id` join, and `comprehensiveness`/`sufficiency` returned single floats which made bootstrap CI impossible. Four open design questions were decided: displacement is `rank_after − rank_before`, interventions carry a `seed` column, and synthetic ground truth received its own schema with validator and logger.
+**Review round 1 (`94561f7`).** Shubham reviewed the initial infrastructure and raised 20 issues; all 20 are resolved. The eight evaluation bugs were the substantive ones — `rank_correlation` was being fed a constant array, intervention types were being merged across a bare `doc_id` join, and `comprehensiveness`/`sufficiency` returned single floats which made bootstrap CI impossible. Four design questions were decided: displacement is `rank_after − rank_before`, interventions carry a `seed` column, and synthetic ground truth received its own schema with validator and logger.
+
+**Review round 2 (`eb6f207`, Shubham).** Follow-up fixes to `evaluation.py` and shared config:
+
+- `average_over_seeds` collapses the three seed replicates into one row per `(query_id, doc_id, intervention_type)` before any metric runs. Previously the seeds tripled the joined rows and `comprehensiveness` silently kept only the last seed.
+- The Stage 1 intervention became a parameter with a degeneracy warning — see T1.
+- `recovery_error` was redefined as a displacement *share*, bounded in [0, 1] — see T10.
+- Synthetic `attribution_error` now uses per-document truth where available, and raises on missing or duplicated truth rows rather than silently substituting.
+- `requirements.txt`: torch → 2.2.2 and faiss-cpu → 1.8.0, since 2.1.2 / 1.7.4 have no Python 3.12 wheels and current Colab is on 3.12. All pins verified resolvable from wheels on Python 3.10–3.12 (Linux, macOS arm64).
+- `run_pipeline` warns when `--max-passages` leaves candidates without text, which were previously reranked against empty strings.
+- Roadmap §1.8 displacement sign corrected to match the schema, closing Q2.
 
 This matters more than it sounds: three people working in parallel on separate pipelines only works if their outputs are perfectly interchangeable. That is now guaranteed by code and tests rather than by convention.
 
@@ -222,21 +240,21 @@ Realistically: **week 1 of a 10-week plan.** The workbench is built; the woodwor
 
 These are load-bearing and currently written down nowhere.
 
-### T1 — `randomize_stage1_scores` may be a no-op as specified (highest priority)
+### T1 — `randomize_stage1_scores` is a no-op as specified (highest priority)
 
 The roadmap specifies: keep the same candidate set, replace Stage 1 scores with uniform random, re-run Stage 2, compute displacement.
 
-**The problem:** a cross-encoder scores a `(query, passage)` pair. It never reads the Stage 1 score. So if the candidate set is held fixed and the pipeline is a pure cascade where `final_rank = stage_2_rank`, re-running Stage 2 produces *identical* scores and *identical* ranks. Displacement would be zero for every document, by construction.
+**The problem:** a cross-encoder scores a `(query, passage)` pair. It never reads the Stage 1 score. So if the candidate set is held fixed and the pipeline is a pure cascade where `final_rank = stage_2_rank`, re-running Stage 2 produces *identical* scores and *identical* ranks. Displacement is zero for every document, by construction — which would have left `displacement_correlation_stage1` correlating predictions against an all-zero vector, and **compromised E2**.
 
-This is not a hypothetical problem. `_STAGE_INTERVENTION_MAP` in `evaluation.py` pairs `stage_1_attribution` with `randomize_stage1_scores`, so `displacement_correlation_stage1` would correlate predictions against an all-zero vector — NaN or meaningless. **This directly compromises E2.**
+**Status:** Anupam and Shubham identified this independently, which is reassuring about the diagnosis. `eb6f207` has already defused the silent-failure half: the Stage 1 intervention is now a parameter (`stage1_intervention`, defaulting to `randomize_stage1_scores`), and `_warn_if_degenerate` logs a warning when an intervention never moves any document. So switching the decision is a one-argument change and the degenerate case is no longer silent.
 
-Candidate resolutions to discuss:
+**The substantive decision is still open.** Candidate resolutions:
 - **(a)** Randomize scores *and* reselect the candidate set from the randomized scores. Then the candidate set genuinely changes and displacement is real — but this conflates ordering with gating, which is precisely what we are trying to separate.
 - **(b)** Define the pipeline with score fusion (`final = λ·s₁ + (1−λ)·s₂` rather than pure replacement), so Stage 1 scores do influence final order. More realistic for some production systems, and makes the intervention meaningful — but it is a change to the pipeline definition, not just the intervention.
 - **(c)** Replace this intervention with a *candidate-set perturbation* (randomly drop or swap a fraction of candidates) which is well-defined under a pure cascade.
 - **(d)** Accept it as a deliberate null control — if Stage 1's ordering provably cannot affect a pure cascade's output, that is itself a finding worth reporting, and the attribution methods should recover ≈0 for Stage 1 ordering.
 
-Option (d) is intellectually clean and cheap, but means we lose one of three interventions as a ground-truth source. **This needs resolving before Shubham implements E2.**
+Option (d) is intellectually clean and cheap, but means we lose one of three interventions as a ground-truth source. Shubham's code comment suggests `remove_gating` as the natural substitute, which is close to option (a) but keeps gating and ordering distinguishable because gating is what it measures by design. **This needs resolving before E2 runs.**
 
 ### T2 — Synthetic generation parameters are unspecified
 
@@ -278,7 +296,17 @@ Documents outside the candidate set have no Stage 2 rank. Every attribution meth
 
 In the roadmap's directory listing, `retrievers/`, `attribution/`, `synthetic/` and `analysis/` all carry owner names. `interventions/` carries none. Part 2 implies each member runs interventions on their own pipelines, but someone must own the shared implementation so three variants don't appear. Suggest assigning it explicitly.
 
-### T10 — Compute and storage budget
+### T10 — Is `|d1| / (|d1| + |d2|)` the right normalized displacement?
+
+`eb6f207` defines normalized displacement as Stage 1's share of total observed displacement, which is bounded in [0, 1] and mirrors the `stage_1 + stage_2 = 1` constraint on attribution. Shubham flagged it explicitly as a proposal for the team rather than a settled choice. Points to discuss:
+
+- A *share* discards magnitude. A document where both interventions move it 2 places and one where both move it 400 places produce the same share of 0.5, despite the second being far more stage-sensitive. Should magnitude re-enter as a weight — e.g. weighting each document's contribution to the mean by `|d1| + |d2|`?
+- Documents that neither intervention moves are skipped. Those are arguably the most interesting cases (the pipeline's output was robust to removing *either* stage), and silently dropping them biases the population toward stage-sensitive documents. How many such documents are there in practice, and should they be reported separately?
+- Taking absolute values discards direction. A document promoted by Stage 2 and one demoted by it are treated identically. Is that intended?
+
+Whichever definition we adopt needs to be stated and defended in the report, since the method ranking may depend on it.
+
+### T11 — Compute and storage budget
 
 A ColBERT index over 8.8M passages is substantial on disk (plausibly 100 GB+ depending on configuration) and free-tier Colab/Kaggle may not accommodate it. Worth an inventory: who has what GPU access, what local disk, and what the fallback is. The roadmap already names Contriever as the ColBERT fallback — the trigger condition for taking it should be agreed in advance rather than in week 6 under pressure.
 
@@ -326,4 +354,8 @@ Dense retriever indexing (DPR, ColBERT, SPLADE) and cross-encoder reranking acro
 
 We are building the first benchmark for attributing responsibility between stages of a multi-stage retrieval pipeline. The core difficulty is the absence of ground truth, which we address two ways: synthetic pipelines where the answer is planted by construction, and interventions on real pipelines where the answer is measured causally by breaking a stage and observing displacement. Four attribution methods are then graded on both, and the agreement pattern between the two grades is the scientific payload.
 
-The shared infrastructure is complete and reviewed. The experimental work has not begun. The highest-priority open item is **T1** — `randomize_stage1_scores` appears to be a no-op under a pure cascade, which would compromise E2 — followed by **T2**, pinning the synthetic generation parameters before any synthetic data is produced.
+The shared infrastructure is complete and has been through two review rounds. The experimental work has not begun.
+
+The highest-priority open items are **T1** — `randomize_stage1_scores` is a no-op under a pure cascade, now parameterized and warned about in code but still needing a substantive decision before E2 runs — and **T2**, pinning the synthetic generation parameters before any synthetic data is produced. **T10** (the normalized-displacement definition) and **T3** (gating effects being structurally unobservable in a top-10 attribution population) are the two that most affect how the results can be interpreted.
+
+Worth noting that T1 was found independently by two people working from different directions, and that both review rounds caught real bugs that would have silently corrupted results rather than crashing. That is the data contract and test suite earning their keep. The same scrutiny should be applied to the attribution methods and interventions as they land, since those have no equivalent safety net yet.
