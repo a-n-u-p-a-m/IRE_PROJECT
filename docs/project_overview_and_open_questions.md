@@ -97,7 +97,130 @@ Each runs with three seeds (42, 123, 456); report mean displacement ± std. Disp
 
 ---
 
-## 5. How the synthetic and real halves are compared
+## 5. The four attribution methods
+
+All four implement the same interface, so any method runs on any pipeline's score matrix:
+
+```python
+def compute_attribution(score_matrix: pd.DataFrame, top_k: int = 10) -> pd.DataFrame:
+    """Input: score matrix in agreed schema. Output: attribution result."""
+```
+
+They sit on a deliberate spectrum from trivially cheap to theoretically principled, plus one control. The point of the comparison is to find out whether the expensive ones earn their cost.
+
+---
+
+### 5.1 Rank-delta (Anupam)
+
+**The idea.** Compare where a document sat after Stage 1 with where it sat after Stage 2. If it moved a long way, Stage 2 did the work. If it barely moved, Stage 1 had already decided the outcome and Stage 2 merely agreed.
+
+**The computation**, per the roadmap:
+
+```
+Δ = (rank_1 − rank_2) / rank_1        # positive ⇒ Stage 2 promoted it
+```
+
+then rescale so `stage_1_attribution + stage_2_attribution = 1.0`.
+
+A document BM25 ranked 800th that the reranker lifted to 3rd gives Δ ≈ 0.996 — almost all Stage 2. A document ranked 2nd by both gives Δ = 0 — Stage 2 contributed nothing beyond confirmation.
+
+**Why it is in the study.** It costs nothing. No model access, no reruns, only the score matrix we already log. If it performs comparably to stage-Shapley, that is the single most practically useful finding the project could produce, because it is a diagnostic anyone can afford to run in production on every query.
+
+**Known weaknesses, which are part of what we are measuring:**
+
+- **Positional only.** It reads ranks, never scores. Two documents with identical rank movement get identical attribution even if one moved on a hairline score difference and the other on a chasm.
+- **The normalization is asymmetric and unbounded below.** 1000 → 1 gives Δ = 0.999; 2 → 1 gives Δ = 0.5; 1 → 2 gives Δ = −1.0; 1 → 100 gives Δ = −99. Positive values are bounded by 1 but negative values are not bounded at all. *How* we squash this into [0, 1] is a free design choice that will visibly affect results — see T12.
+- **It conflates agreement with irrelevance.** Δ = 0 means the stages agreed, which rank-delta reports as a 50/50 split. But "both stages independently ranked this first" and "neither stage had any influence" are completely different situations receiving identical attribution.
+- **It is structurally blind to gating.** A document outside the candidate set has no `stage_2_rank` at all, so Δ is undefined. Rank-delta can therefore say nothing about the half of Stage 1's power that matters most.
+
+---
+
+### 5.2 Inclusion-vs-ordering decomposition (Anupam)
+
+**The idea, and the project's most likely original contribution.** Stage 1 exercises two separable powers (§1). This method splits its attribution accordingly:
+
+- `gating_attribution` — how much did Stage 1's *decision to admit* this document determine its fate?
+- `ordering_attribution` — given that it was admitted, how much did Stage 1's *score* influence the final position?
+
+**The mechanism** keys on proximity to the candidate boundary at K = 1000. A document at Stage 1 rank 4 was going to be admitted under any plausible K; its gating attribution is near zero, because admission was never in question. A document at rank 987 was one small perturbation away from being invisible; gating was nearly the whole story. So `gating_attribution` rises sharply as Stage 1 rank approaches K, and `ordering_attribution` carries the residual influence.
+
+**Why it matters.** It is the only method producing a *directly actionable* answer. "Gating was the problem" means raise K or improve recall. "Ordering was the problem" means improve Stage 1's scoring function. Every other method returns a number that tells you which stage to blame but not what to do about it. Nothing in the surveyed literature performs this decomposition, which is why it is our strongest novelty claim.
+
+**Known weaknesses:**
+
+- **Its schema relationship is undefined.** Is `gating + ordering = stage_1_attribution`? Something else? Currently unconstrained — see T7.
+- **It cannot be validated on `linear_mix`**, which has no gate. It needs the `gated` synthetic setting, making that setting load-bearing rather than supplementary.
+- **The evaluation population may exclude exactly the cases it explains.** Documents genuinely killed by gating are absent from the final top-10 by definition — see T3. This is the sharpest threat to the method's evaluability.
+- **Boundary proximity is a proxy, not a measurement.** There is a real risk the method merely re-derives "distance from rank 1000", which is trivially available from the score matrix and requires no attribution machinery. The `remove_gating` intervention is the actual measurement; the method must beat the trivial baseline to be worth anything.
+
+---
+
+### 5.3 Stage-Shapley (Shubham)
+
+**The idea.** Borrow from cooperative game theory. Treat each stage as a player; a stage's attribution is its average marginal contribution across all coalition orderings. Shapley values are the *unique* allocation satisfying efficiency, symmetry, dummy and additivity — the only method here with a uniqueness guarantee.
+
+With two stages there are four coalitions, so the full enumeration is cheap. The roadmap's value function:
+
+| Coalition | Value |
+|---|---|
+| `v({})` | 0 |
+| `v({S2})` | 0 |
+| `v({S1})` | Stage 1 ranking only |
+| `v({S1, S2})` | Full pipeline |
+
+Working the Shapley formula through for two players:
+
+```
+φ_S1 = ½[v({S1}) − v({})]      + ½[v({S1,S2}) − v({S2})]  =  ½·v({S1}) + ½·v({S1,S2})
+φ_S2 = ½[v({S2}) − v({})]      + ½[v({S1,S2}) − v({S1})]  =  ½[v({S1,S2}) − v({S1})]
+```
+
+Efficiency checks out: `φ_S1 + φ_S2 = v({S1,S2})`.
+
+**But look at what `v({S2}) = 0` does.** Stage 1 alone is not worthless — BM25 alone reaches nDCG@10 ≈ 0.50. So `v({S1})` is substantially positive, and it appears **twice**: added to `φ_S1` and subtracted from `φ_S2`, each at half weight. The attribution is therefore biased toward Stage 1 by `½·v({S1})` *by construction*, and the size of that bias grows with how good the retriever is alone.
+
+This is not a rounding artifact. It is a systematic bias proportional to Stage 1's standalone quality, and it would make Shapley look like it "discovers" that stronger retrievers matter more — a conclusion that is purely an artifact of the value function. **This needs resolving before the Shapley column of the comparison table can be trusted (T6).**
+
+The honest definition, `v({S2}) =` Stage 2 over the full corpus, requires running a cross-encoder across 8.8M passages per query. Infeasible. A promising middle route: `remove_gating` already reranks the top 5,000, which is a partial observation of Stage 2 operating under weakened Stage 1 influence, and could seed an estimate of `v({S2})` rather than assuming zero.
+
+**Other weaknesses:**
+
+- **Expensive relative to rank-delta** — requires actually rerunning the pipeline per coalition.
+- **Shapley allocates a scalar, but our schema wants per-document attribution.** This means `v` must be defined *per document* — document `d`'s reciprocal rank under coalition `S`, say, or `1/rank_d(S)`. The roadmap does not specify this, and the choice materially changes the output (T13).
+
+---
+
+### 5.4 Reranker-only attribution / Rank-LIME (Shubham)
+
+**This is not a cross-stage method, deliberately.** It is the control, and it exists to attack the project's own premise.
+
+It takes the cross-encoder in isolation and applies established single-ranker attribution — Rank-LIME or RankingSHAP — perturbing inputs and fitting a local surrogate to explain the reranker's scores. It knows nothing about Stage 1 and makes no attempt to.
+
+**Why include a method that cannot answer the research question.** Because it is the null hypothesis. If reranker-only attribution predicts intervention displacements as well as the genuinely cross-stage methods, then **cross-stage attribution is unnecessary** and practitioners should keep using the tools they already have. The roadmap correctly lists this under risks as a valid finding rather than a failure. A benchmark that cannot fail is not a benchmark.
+
+**Two structural problems to resolve before implementation:**
+
+- **It may be unable to fill the schema.** The contract requires `stage_1_attribution + stage_2_attribution = 1.0`. A reranker-only method has nothing to put in `stage_1_attribution`. If it always emits (0.0, 1.0) it is a constant predictor, and `rank_correlation` returns NaN for constant input — which the E8 fix now handles gracefully, but a constant baseline also cannot be meaningfully ranked against the others on correlation metrics. We need to decide what it emits (T14).
+- **Rank-LIME attributes to *features*, but a cross-encoder consumes text.** Perturbing "features" means perturbing query or passage tokens, which yields *term-level* attribution. The mapping from term-level importance to a single stage-level number is undefined and is not something Rank-LIME provides. This needs specifying, and it is more work than "wrap the existing library" suggests.
+
+---
+
+### 5.5 What the comparison is really testing
+
+Read as a set, the four methods span the hypothesis space:
+
+| Method | Cost | What it would mean if this one wins |
+|---|---|---|
+| Rank-delta | Free | Stage attribution is easy; use the cheap proxy everywhere |
+| Inclusion-ordering | Low | The gating/ordering split is the right abstraction for cascades |
+| Stage-Shapley | High | Axiomatic rigour is necessary; approximations lose real information |
+| Reranker-only | Medium | Cross-stage attribution is unnecessary — the project's premise is wrong |
+
+Every one of those four outcomes is publishable. That is the mark of a well-posed comparison.
+
+---
+
+## 6. How the synthetic and real halves are compared
 
 **We do not compare the synthetic pipeline to the real pipeline.** That comparison would be meaningless — different data, different score scales, different everything.
 
@@ -161,7 +284,7 @@ This replaced two earlier attempts, both of which were unbounded: dividing by th
 
 ---
 
-## 6. Real-world significance
+## 7. Real-world significance
 
 **RAG debugging.** Every production retrieval-augmented system is a multi-stage pipeline feeding an LLM. When the model answers wrongly because a critical passage was never retrieved, an engineer must guess: raise top-K? swap the embedding model? retrain the reranker? fix chunking? Today that is trial and error — change something, rerun the eval set, watch the number. Stage attribution converts guessing into diagnosis. This is what RAGXplain reaches for at the component level and what our debugger deliverable does at the ranking level.
 
@@ -175,7 +298,7 @@ This replaced two earlier attempts, both of which were unbounded: dividing by th
 
 ---
 
-## 7. Work division
+## 8. Work division
 
 The structure is **vertical slicing**: each member owns complete pipelines end-to-end rather than everyone owning one horizontal layer. Nobody blocks on anyone after day one.
 
@@ -192,7 +315,7 @@ The structure is **vertical slicing**: each member owns complete pipelines end-t
 
 ---
 
-## 8. Current status
+## 9. Current status
 
 ### Complete
 
@@ -236,7 +359,7 @@ Realistically: **week 1 of a 10-week plan.** The workbench is built; the woodwor
 
 ---
 
-## 9. Open design decisions requiring team agreement
+## 10. Open design decisions requiring team agreement
 
 These are load-bearing and currently written down nowhere.
 
@@ -310,13 +433,39 @@ Whichever definition we adopt needs to be stated and defended in the report, sin
 
 A ColBERT index over 8.8M passages is substantial on disk (plausibly 100 GB+ depending on configuration) and free-tier Colab/Kaggle may not accommodate it. Worth an inventory: who has what GPU access, what local disk, and what the fallback is. The roadmap already names Contriever as the ColBERT fallback — the trigger condition for taking it should be agreed in advance rather than in week 6 under pressure.
 
+### T12 — How is rank-delta's Δ squashed into [0, 1]?
+
+`Δ = (rank_1 − rank_2) / rank_1` is bounded above by 1 but unbounded below: 1 → 100 gives Δ = −99. The schema requires `stage_1_attribution + stage_2_attribution = 1.0` with both in [0, 1], so Δ must be mapped into that range, and the roadmap says only "rescale."
+
+The choice is consequential. A linear rescale against the observed min/max makes results depend on batch composition — the same bug already fixed twice in `recovery_error`. A sigmoid or `tanh` squash is batch-independent but introduces a temperature parameter that controls how aggressively large demotions saturate. Clipping at some bound discards information about catastrophic demotions, which are arguably the most diagnostically interesting cases.
+
+Suggest a bounded, batch-independent transform with the parameter stated in `base.yaml`, plus a sensitivity check showing the method ranking does not flip under a reasonable alternative.
+
+### T13 — What is Shapley's per-document value function?
+
+Shapley values allocate a *scalar*. Our schema demands per-document attribution, so `v` must be defined per document — `v_d(S)` = document `d`'s reciprocal rank under coalition `S`, or `1/rank_d(S)`, or its nDCG contribution, or its relevance-weighted gain. The roadmap specifies the coalition semantics (T6) but not this.
+
+The choice is not cosmetic. Reciprocal rank heavily weights the top of the list, so a document moving 1 → 2 registers a larger value change than one moving 50 → 100, which will systematically inflate Stage 2's attribution for top-ranked documents. A linear rank-based `v` does the opposite. *ShaRP* ([10.14778/3749646.3749682](https://dl.acm.org/doi/10.14778/3749646.3749682)) may already address this and is worth reading before implementing.
+
+### T14 — What does the reranker-only method put in `stage_1_attribution`?
+
+A reranker-only method has no view of Stage 1, but the schema requires the two attributions to sum to 1.0. Options: emit a constant (0.0, 1.0), which makes it a constant predictor whose `rank_correlation` is NaN and which cannot be meaningfully ranked on correlation metrics; derive a pseudo-Stage-1 signal from the residual the reranker cannot explain; or exempt it from the sum constraint and compare it only on the metrics where it is defined.
+
+The third is probably most honest but requires relaxing the schema validator for this one method — which should be an explicit, documented exemption rather than a silently loosened constraint. Relatedly, Rank-LIME produces *term-level* attribution over text, and the mapping from term importance to a stage-level scalar is undefined and not something the library provides. This is more implementation work than "wrap the existing library" suggests, and should be scoped before week 4.
+
 ---
 
-## 10. Questions for the supervisor
+## 11. Questions for the supervisor
 
-### S1 — Does the Deterministic Horizon bound limit what we can claim?
+### S1 — Can we cite the Deterministic Horizon as motivation rather than a limitation?
 
-The roadmap cites arXiv 2605.23024 as a formal impossibility bound for k-stage attribution. We need help interpreting its scope precisely. If attribution is provably impossible in general, what remains achievable, and how should the report frame our positive results against it? This affects how we position the entire contribution and should be settled early rather than discovered in week 9.
+Having now read the source (see 12.1), we believe the roadmap mischaracterized it. Guo's Construct Conflation Impossibility Theorem bounds *single-score diagnosis* of multi-stage pipelines — a k-stage pipeline provably needs ≥ k independent metrics — not stage-level attribution itself. On that reading it is formal justification for why this project is necessary and belongs in the introduction, not the limitations.
+
+We would like confirmation of that reading before we build the framing on it. Two specific concerns: the paper appears to be a thesis rather than a peer-reviewed venue paper, and we have read Chapter 4 via its abstract and section summaries rather than the full proof in Appendix A. Is it solid enough to carry an introduction's motivating claim, and is there a better-established citation for the same point?
+
+### S1b — Is there a genuine impossibility result we should know about?
+
+Our original understanding was that a formal bound on k-stage attribution exists. Having failed to find one, we would like to know whether the supervisor is aware of such a result. If attribution across cascade stages is provably underdetermined in some regime, we would rather build that into the benchmark's design from the start than discover it in week 9.
 
 ### S2 — Is intervention displacement legitimate ground truth, or is the argument circular?
 
@@ -328,9 +477,11 @@ We believe the causal framing defends this — an intervention is a counterfactu
 
 Our primary contribution is the benchmark plus an evaluation of four *existing* methods adapted to the multi-stage setting. Is that sufficient for the project's standards, or does it need a novel attribution method of its own? If the latter, the inclusion-vs-ordering decomposition is the strongest candidate for novelty and should be positioned accordingly from the start.
 
-### S4 — Novelty check against Agarwal et al. (BioNLP 2026)
+### S4 — Is our distinction from Agarwal et al. (BioNLP 2026) defensible?
 
-Our literature review flags this as the closest existing work — stage-instrumented clinical retrieval. We would like a read on whether it preempts our contribution or whether domain-generality plus the synthetic ground-truth protocol is sufficient differentiation.
+Having read it (see 12.2), their pipeline instruments four ablated stages with per-stage diagnostic metrics but does not attribute a *specific document's* final rank to a stage, and does not evaluate competing attribution methods against ground truth.
+
+Our proposed distinction is per-stage **performance measurement** (theirs) versus per-document, per-stage **credit assignment** validated against planted and interventional ground truth (ours). Does that hold up to a skeptical reviewer, or is it too fine a line? We would rather sharpen the framing now than defend it at submission.
 
 ### S5 — Is the scope realistic for 10 weeks?
 
@@ -350,12 +501,77 @@ Dense retriever indexing (DPR, ColBERT, SPLADE) and cross-encoder reranking acro
 
 ---
 
-## 11. Summary
+## 12. Related work — annotated, with citations verified
+
+All thirteen roadmap citations were checked against primary sources on 2026-10-05. Eleven are accurate. **Two are materially mischaracterized and both changes are in our favour** — details in 12.1 and 12.2, which should be read before the related-work section of the report is drafted.
+
+### 12.1 Correction: The Deterministic Horizon does not bound what we are doing
+
+**Roadmap says:** "Formal impossibility bound for k-stage attribution" with "impossibility bound implications."
+
+**What the paper actually says.** Dongxin Guo, *The Deterministic Horizon: Impossibility Results as Design Specifications for Trustworthy AI Systems* ([arXiv 2605.23024](https://arxiv.org/abs/2605.23024)) is a multi-domain compendium of impossibility results — reasoning depth, preference learning, auction design, zero-knowledge verification, circuit complexity — of which multi-stage retrieval is one chapter. The relevant result is the **Construct Conflation Impossibility Theorem** (Thm. 4.3, Ch. 4), derived from psychometric measurement-validity theory:
+
+> "Retrieval pipelines with more than one stage cannot be diagnosed by any single score: at least as many independent metrics as stages are mathematically required."
+
+**This bounds single-score diagnosis, not attribution.** It does not say stage-level attribution is impossible. It says a *blended* metric (RAGAS and similar) provably cannot diagnose a multi-stage pipeline, and that a k-stage pipeline needs ≥ k independent, orthogonal metrics.
+
+**That motivates this project rather than limiting it.** For a 2-stage retrieve-then-rerank pipeline the theorem requires exactly two independent stage-level metrics — which is what stage attribution supplies. We should cite it as formal justification for why the work is necessary, in the introduction, not as a caveat in the limitations. Worth confirming the chapter and theorem numbering against the full PDF before citing, and noting it appears to be a thesis rather than a peer-reviewed venue paper.
+
+### 12.2 Correction: Agarwal et al. is a weaker preemption than feared
+
+**Roadmap says:** "Stage-instrumented clinical retrieval — closest existing work."
+
+**What the paper actually is.** Shubham Agarwal, Thomas Searle, Richard Dobson, Ninoslav Majkic, Niko Moller-Grell, *A Deterministic Multi-Stage Retrieval Pipeline for Longitudinal EHR Question Answering*, BioNLP 2026 ([ACL Anthology 2026.bionlp-1.53](https://aclanthology.org/2026.bionlp-1.53/)). It decomposes retrieval into four ablated stages, each instrumented with diagnostic metrics, reporting a 22–23% relative recall gain on clinical data.
+
+**It ablates stages; it does not attribute across them.** Its diagnostic metrics measure *per-stage performance* — how well each stage does its job. It does not measure which stage is responsible for a *specific document's* final rank, and it does not evaluate competing attribution methods against ground truth.
+
+The distinction matters for how we position the contribution: per-stage *performance measurement* (their work) versus per-document, per-stage *credit assignment* evaluated against planted and interventional ground truth (ours). It is the nearest neighbour and must be cited and distinguished explicitly — the overlap is real enough that a reviewer will ask — but it does not preempt us. It is also strong supporting evidence that stage instrumentation is a live practical need. Interesting coincidence worth noting: its first author shares a name with our own Shubham, so cite carefully to avoid confusion.
+
+### 12.3 The four methods' source papers
+
+| Paper | Verified identifier | Role in our work |
+|---|---|---|
+| Chowdhury et al., *Rank-LIME: Local Model-Agnostic Feature Attribution for Learning to Rank*, ICTIR 2023 | [10.1145/3578337.3605138](https://dl.acm.org/doi/10.1145/3578337.3605138) | Direct basis for method 4. Single-stage baseline; confirms no multi-stage handling exists. |
+| Heuss, de Rijke & Anand, *RankingSHAP: Listwise Feature Attribution Explanations for Ranking Models* | [arXiv 2403.16085](https://www.alphaxiv.org/overview/2403.16085); reference implementation at [MariaHeuss/RankingShap](https://github.com/MariaHeuss/RankingShap) | Shapley axioms for method 3; alternative basis for method 4. **Roadmap lists "SIGIR 2025" — venue unconfirmed, the preprint is 2024. Verify before citing.** |
+| DeYoung et al., *ERASER*, 2020 | Established | Source of comprehensiveness and sufficiency, which we adapt from rationale extraction to stage removal. The adaptation is ours and should be described as such. |
+| Câmara & Hauff, ECIR 2020 | Established | Probing methodology for BERT rankers; informs the perturbation design in method 4. |
+
+A reference implementation existing for RankingSHAP is worth acting on — Shubham should check whether it can be adapted directly rather than reimplemented.
+
+### 12.4 Gap-establishing surveys
+
+| Paper | Verified identifier | Why cited |
+|---|---|---|
+| Saha, Majumdar & Mitra, *Explainability of Text Processing and Retrieval Methods: A Survey* | [arXiv 2212.07126](https://arxiv.org/abs/2212.07126); ACM CSUR version [10.1145/3801957](https://dl.acm.org/doi/10.1145/3801957) | Most recent survey; confirms the cascade gap. Roadmap's "2026" is consistent with the CSUR version, but the preprint is 2022 — cite the CSUR record. |
+| Anand et al. (2022) survey + SIGIR 2023 tutorial | Established | ExIR taxonomy; names "retrieval cascades" as an open challenge. The load-bearing citation for our gap claim. |
+| Thakur et al., *BEIR*, NeurIPS 2021 | Established | Cross-paradigm benchmark methodology; dataset source for E8. |
+
+### 12.5 Adjacent systems
+
+| Paper | Verified identifier | Relationship |
+|---|---|---|
+| *RAGXplain: From Explainable Evaluation to Actionable Guidance of RAG Pipelines* | [arXiv 2505.13538](https://arxiv.org/abs/2505.13538) | Component-level RAG diagnostics — the same instinct one level up the stack. Our debugger is the ranking-level analogue. Confirmed accurate. |
+| *WSDM Cup 2026 Multilingual Retrieval: A Low-Cost Multi-Stage Retrieval Pipeline* | [arXiv 2602.16989](https://arxiv.org/abs/2602.16989); [10.1145/3773966.3778021](https://dl.acm.org/doi/10.1145/3773966.3778021) | Stage ablation in a deployed competition pipeline. **Roadmap attributes it to "Hao & Wang" — author list unconfirmed, verify before citing.** |
+| ExDocS (2021) | Established | "Why is document X at rank Y" — single-stage framing of our question. |
+
+### 12.6 Worth adding to the review
+
+Three items surfaced during verification that are not in the roadmap and look relevant:
+
+- *Rectify: An Interactive Workbench for Post-Evaluation RAG Diagnosis, Repair, and Verification* ([arXiv 2609.16764](https://arxiv.org/html/2609.16764)) — overlaps our debugger deliverable; check before building to avoid reinventing it.
+- *RAGExplorer: A Visual Analytics System for the Comparative Diagnosis of RAG Systems* ([arXiv 2601.12991](https://arxiv.org/html/2601.12991v1)) — comparative diagnosis across systems, close to our cross-paradigm analysis (E4).
+- *ShaRP: Explaining Rankings and Preferences with Shapley Values* ([10.14778/3749646.3749682](https://dl.acm.org/doi/10.14778/3749646.3749682)) — another Shapley-for-rankings formulation; may inform the document-level value function question (T13).
+
+---
+
+## 13. Summary
 
 We are building the first benchmark for attributing responsibility between stages of a multi-stage retrieval pipeline. The core difficulty is the absence of ground truth, which we address two ways: synthetic pipelines where the answer is planted by construction, and interventions on real pipelines where the answer is measured causally by breaking a stage and observing displacement. Four attribution methods are then graded on both, and the agreement pattern between the two grades is the scientific payload.
 
 The shared infrastructure is complete and has been through two review rounds. The experimental work has not begun.
 
-The highest-priority open items are **T1** — `randomize_stage1_scores` is a no-op under a pure cascade, now parameterized and warned about in code but still needing a substantive decision before E2 runs — and **T2**, pinning the synthetic generation parameters before any synthetic data is produced. **T10** (the normalized-displacement definition) and **T3** (gating effects being structurally unobservable in a top-10 attribution population) are the two that most affect how the results can be interpreted.
+The highest-priority open items are **T1** — `randomize_stage1_scores` is a no-op under a pure cascade, now parameterized and warned about in code but still needing a substantive decision before E2 runs — and **T2**, pinning the synthetic generation parameters before any synthetic data is produced. **T6** matters nearly as much: setting `v({S2}) = 0` biases Shapley toward Stage 1 by `½·v({S1})` by construction, which would corrupt one full column of the comparison table. **T10** (normalized-displacement definition) and **T3** (gating effects being structurally unobservable in a top-10 population) most affect how results can be interpreted.
+
+On the literature, two roadmap citations were mischaracterized and both corrections help us: the Deterministic Horizon bounds single-score *diagnosis* rather than attribution, so it motivates the work instead of limiting it, and Agarwal et al. ablate stages without attributing across them, so the novelty claim is safer than assumed. Three unlisted and apparently relevant papers were also found — see 12.6, particularly *Rectify*, which overlaps the debugger deliverable and should be read before Chaitanya builds it.
 
 Worth noting that T1 was found independently by two people working from different directions, and that both review rounds caught real bugs that would have silently corrupted results rather than crashing. That is the data contract and test suite earning their keep. The same scrutiny should be applied to the attribution methods and interventions as they land, since those have no equivalent safety net yet.
