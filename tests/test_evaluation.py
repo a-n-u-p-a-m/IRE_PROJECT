@@ -197,3 +197,15 @@ class TestReal:
         # Stage 2 dominant: d2 (1, median 1 → miss), d3 (3 → hit), d4 (3 → hit)
         # (A pooled median of 51.5 would give d0, d1 hits only → 2/5.)
         assert comp["q1"] == pytest.approx(3 / 5)
+
+    def test_comprehensiveness_median_ignores_unattributed_docs(self, attribution):
+        # Intervention files cover every candidate; low-ranked documents that
+        # were never attributed must not shift the median.
+        rows = (_intervention_rows("remove_gating", [100, 300, 200, 100, 100])
+                + _intervention_rows("remove_stage2", [1, 1, 1, 3, 3]))
+        extra = [{"query_id": "q1", "doc_id": f"x{i}", "intervention_type": "remove_stage2",
+                  "seed": None, "rank_before": 100 + i, "rank_after": 900 + i,
+                  "displacement": 800} for i in range(50)]
+        comp = comprehensiveness(attribution, pd.DataFrame(rows + extra),
+                                 stage1_intervention="remove_gating")
+        assert comp["q1"] == pytest.approx(3 / 5)

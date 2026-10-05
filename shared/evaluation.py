@@ -326,19 +326,26 @@ def comprehensiveness(
     2. Look up the intervention that removes the dominant stage
        (stage1_intervention or remove_stage2), averaged over seeds.
     3. Hit if |displacement| exceeds the median |displacement| of that
-       same intervention type (types are on different scales).
+       same intervention type (types are on different scales), taken over
+       the attributed documents only: intervention files cover every
+       candidate (e.g. 1000 per query), and including unattributed,
+       low-ranked documents would distort the median.
 
     Returns dict[query_id → comprehensiveness] for bootstrap_ci.
     """
     interv = average_over_seeds(intervention_df)
-    medians = (
-        interv.assign(abs_disp=interv["displacement"].abs())
-        .groupby("intervention_type")["abs_disp"].median()
-    )
-
     attr = _attribution_keys(attribution_df)[
         ["query_id", "doc_id", "stage_1_attribution"]
     ]
+
+    evaluated = interv.merge(
+        attr[["query_id", "doc_id"]].drop_duplicates(), on=["query_id", "doc_id"]
+    )
+    medians = (
+        evaluated.assign(abs_disp=evaluated["displacement"].abs())
+        .groupby("intervention_type")["abs_disp"].median()
+    )
+
     attr["intervention_type"] = np.where(
         attr["stage_1_attribution"] > 0.5,
         stage1_intervention,

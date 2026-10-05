@@ -154,6 +154,28 @@ def load_corpus(max_passages: int | None = None) -> dict[str, str]:
     return corpus
 
 
+def load_passages(doc_ids) -> dict[str, str]:
+    """
+    Load only the given passages, streaming the collection instead of holding
+    all 8.8M in memory.  Returns dict[pid → text]; unknown ids are omitted.
+    """
+    wanted = {str(d) for d in doc_ids}
+    if not wanted:
+        return {}
+
+    passages: dict[str, str] = {}
+    with open(_ensure_collection_tsv(), encoding="utf-8") as f:
+        for line in f:
+            pid, text = line.rstrip("\n").split("\t", 1)
+            if pid in wanted:
+                passages[pid] = text
+                if len(passages) == len(wanted):
+                    break
+
+    logger.info("Loaded %d of %d requested passages", len(passages), len(wanted))
+    return passages
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Queries
 # ──────────────────────────────────────────────────────────────────────
