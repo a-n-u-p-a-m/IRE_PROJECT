@@ -3,7 +3,7 @@
 **Project:** Reachability and Ordering — Architecture-Dependent Stage Attribution in Multi-Stage Retrieval
 **Course:** CS4.406 — Information Retrieval & Extraction
 **Team:** Anupam Dwivedi, Shubham Paliwal, Chaitanya K
-**Date:** 2026-10-05
+**Date:** 2026-10-05 (scope reduced same day — see §5)
 **Supersedes:** the problem framing in `roadmap_final.md`. That document's shared design choices (§1.1–1.11) remain in force except where §4 below overrides them.
 **Companion:** `docs/project_overview_and_open_questions.md` — holds the detailed methodology, the four methods, the open doubts T1–T14 and the supervisor questions S1–S8.
 
@@ -62,7 +62,8 @@ A targeted adversarial literature search was run on 2026-10-05. Ratings reflect 
 | C4 | **Necessity/sufficiency measurement model for retrieval stages** | **Moderate–high** | Watson et al. supply the theory; no application to retrieval pipelines found. |
 | C5 | **Benchmark of four methods** across architectures and paradigms, with bootstrap CIs | **Moderate** | Valuable, but see the warning below. |
 | C6 | **Order-independent alternative to cumulative ablation** — cumulative ablation (current practice, including Agarwal et al.) yields order-dependent credit; stage-Shapley does not | **Moderate** | A concrete, nameable improvement over the closest existing work. |
-| C7 | **Interactive retrieval debugger** — query → per-stage rankings → per-document reachability and ordering diagnostics → stage toggle | Engineering | Check *Rectify* (arXiv 2609.16764) before building; it overlaps. |
+| C7 | **Interactive retrieval debugger** — query → per-stage rankings → per-document reachability and ordering diagnostics → truncation slider | Engineering | Check *Rectify* (arXiv 2609.16764) before building; it overlaps. |
+| C8 | **Reranker score calibration study** — how miscalibrated cross-encoder scores are, whether calibration transfers across query sets, and what it buys downstream | **Moderate–high** | Searching found only blog posts and vendor docs. Same "practitioner pain, no academic supply" signature as the main gap. Methods are standard; the measurement study and downstream-utility demonstration are the contribution. |
 
 ### Warning: the original roadmap's primary contribution is the weakest part
 
@@ -95,8 +96,11 @@ Searches for retriever-vs-reranker attribution return **only blog posts and vend
 | **Framing** | Decompose responsibility into shares summing to 1 | Measure two incommensurable counterfactual quantities | Shares are undefined for a cascade (§1) |
 | **Schema constraint** | `stage_1 + stage_2 = 1.0`, enforced in `schema.py` | Two independent measures; sum-to-one validator relaxed | Category error; needs team sign-off (T7) |
 | **Primary experimental axis** | Retriever paradigm | Paradigm **and** architecture | C2 is the novelty; a 4th paradigm only adds a table row |
-| **Retrievers** | BM25, DPR, ColBERT, SPLADE | BM25, DPR, Contriever (ColBERT only if compute allows) — **SPLADE dropped** | Freed budget buys the architecture axis, which tests the core claim |
-| **Architectures** | Pure cascade only (implicit) | Cascade + fusion (RRF) + permeable gate (adaptive re-ranking) | Cascade is the degenerate limiting case, not the canonical one |
+| **Retrievers** | BM25, DPR, ColBERT, SPLADE | **BM25 only** for the core result; DPR as optional O1 | The degeneracy claim is architecture-level, not paradigm-level. Dropping dense retrieval from the core removes the entire indexing risk |
+| **Architectures** | Pure cascade only (implicit) | **Cascade + truncated rerank**, swept over the truncation point N | Cascade is the degenerate limiting case. Truncation is free (cached scores), gives a continuum rather than a single contrast, and avoids colliding with the *adaptive hybrid fusion* team |
+| **Pipeline count** | Up to 9 (3 paradigms × 3 architectures) | **2, sharing one index** | Scope reduction; see §5 |
+| **Fusion architecture** | — | **Dropped** | Another team is doing adaptive hybrid fusion. `linear_mix` is retained as a synthetic fusion control, which makes the architectural point without building the pipeline |
+| **Extension** | MonoT5, query-type slicing, BEIR | **Reranker score calibration (X1–X4)**, with the earlier extensions demoted to optional | Calibration is free, unclaimed in the class, and closes the loop by prescribing P2's truncation point |
 | **Primary synthetic setting** | `linear_mix` | `gated` — `linear_mix` reclassified as a **fusion-architecture control** | `linear_mix` models fusion, not cascade |
 | `randomize_stage1_scores` | Stage 1 ground truth | **Null control**; its zero result is evidence for RQ1 | Provably a no-op in a pure cascade (T1) |
 | `remove_gating` | Clean gating measurement | **Confounded**; must be reported as such | Widening K degrades the reranker (Jacob et al., ReNeuIR 2025: scaling K made Recall@10 worse than retrieval alone in ~50% of settings), so displacement mixes de-gating with Stage 2 degradation |
@@ -108,33 +112,69 @@ Unchanged: the corpus and query sets (§1.2), candidate set size and its ablatio
 
 ---
 
-## 5. Experiment plan
+## 5. Experiment plan (reduced scope)
 
-### Core
+### Pipelines: two core, sharing one index
 
-| # | Experiment | Tests | Owner |
+The original plan had up to nine pipelines (3 paradigms × 3 architectures). The core result needs **two**, and they share a single BM25 index:
+
+| | Architecture | Construction | Is `s₁` ordering inert? |
 |---|---|---|---|
-| **E0** | **Degeneracy confirmation** — randomise Stage 1 scores within a fixed candidate set on the cascade; verify displacement is identically zero for all documents | RQ1. Cheap, requires no reranking (scores are unchanged by construction), and is the empirical anchor for C1 | Anupam |
-| E1 | Synthetic recovery: four methods × `gated` (primary) and `adversarial`; `linear_mix` run separately as the fusion control | RQ3 | Shubham |
-| E2 | Interventional recovery on the cascade: four methods vs `remove_stage2` (primary ground truth) and `remove_gating` (confound-controlled) | RQ3 | Shubham |
-| E3 | Architecture sweep: repeat E2 on fusion and permeable-gate pipelines | **RQ4 — the core novelty experiment** | Chaitanya + Shubham |
-| E4 | Paradigm sweep: repeat E2 across BM25, DPR, Contriever | RQ4 | Shubham |
-| E5 | Necessity/sufficiency characterisation: distribution of reachability contingency vs ordering dependence per document, per architecture | RQ2 | Anupam |
+| **P1** | Pure cascade | BM25 top-1000 → MiniLM reranks all 1000 | **Yes** — provably |
+| **P2** | Truncated rerank | BM25 top-1000 → MiniLM reranks only top-N; documents at ranks N+1…1000 keep their Stage 1 rank | **No** |
 
-### Extension
+**P2 replaces the fusion and adaptive-re-ranking architectures, and it is free.** Reranking only the top-N of a candidate set is standard production practice for cost control. It creates a *second gate ordered by `s₁`*: Stage 1's ranking decides who gets reranked at all, and sets the final order for everyone below the cut. So `s₁`-rank matters beyond membership, which is exactly the contrast P1 cannot provide.
 
-| # | Experiment | Tests | Owner |
-|---|---|---|---|
-| E6 | Candidate set size (K = 100, 500, 1000) — **free if Stage 2 scores are cached**, since smaller K is a subset of the K=1000 run | Gating boundary sensitivity | Chaitanya |
-| E7 | Query-type slicing across the 97 annotated TREC-DL queries | Does stage dependence vary by query type | Chaitanya |
-| E8 | Reranker strength (MiniLM vs MonoT5) | Does a stronger Stage 2 shift the balance | Anupam |
-| E9 | Cross-domain (one BEIR subset) | Generalisation | Chaitanya |
+Three reasons this is the right cut:
+
+1. **Zero marginal compute.** Rerank the top-1000 once and cache the scores; every N is a subset of that single run. Sweeping N ∈ {10, 50, 100, 500, 1000} costs nothing beyond bookkeeping.
+2. **It gives a continuum, not just a contrast.** At N = 1000, P2 *is* P1 and Stage 1 ordering is inert. As N shrinks, Stage 1's ordering influence grows smoothly. Attribution should transition from pure necessity toward a mixture, and you can plot that transition. A single fusion pipeline gives one more point; this gives a curve.
+3. **No collision.** Another team is doing *adaptive hybrid fusion*. Dropping the fusion architecture avoids sharing a baseline table with a neighbouring project.
+
+**No dense retrieval is required for the core result.** That removes the entire indexing risk identified in §7.
+
+### Core experiments
+
+| # | Experiment | Tests | Cost | Owner |
+|---|---|---|---|---|
+| **E0** | **Degeneracy confirmation** — randomise Stage 1 scores within P1's fixed candidate set; verify displacement is identically zero for every document | RQ1; empirical anchor for C1 | **Free** (scores provably unchanged) | Anupam |
+| **E1** | Synthetic recovery: four methods × `gated` (primary) and `adversarial`; `linear_mix` as a fusion-architecture control | RQ3 | CPU only | Shubham |
+| **E2** | Interventional recovery on P1: four methods vs `remove_stage2` (primary ground truth) and `remove_gating` (confound-flagged) | RQ3 | ~2 h once | Shubham |
+| **E3** | **Truncation sweep** — repeat E2 on P2 at N ∈ {10, 50, 100, 500, 1000}; show Stage 1 ordering attribution rising from zero as N falls | **RQ4 — the core novelty experiment** | **Free** (cached scores) | Chaitanya |
+| **E4** | Necessity/sufficiency characterisation: joint distribution of reachability contingency and ordering dependence per document, per architecture | RQ2 | Free | Anupam |
+
+### Extension: reranker score calibration
+
+Not a bolt-on. Attribution asks *how much did Stage 2 contribute*, which is measured against Stage 2's score scale — and a cross-encoder's scores are not probabilities. If that scale is miscalibrated, the attribution is measured against a ruler with uneven markings, which is a candidate explanation for why methods disagree.
+
+Searching found **only blog posts and vendor documentation** on reranker calibration — the same "practitioner pain, no academic supply" signature as the project's main gap.
+
+| # | Experiment | Tests | Cost | Owner |
+|---|---|---|---|---|
+| **X1** | Measure MiniLM calibration against graded TREC qrels: reliability diagram, expected calibration error | How miscalibrated is Stage 2 in the first place? | Free (reuses `calibration_error`) | Anupam |
+| **X2** | Fit Platt scaling, isotonic regression and temperature scaling on DL19; evaluate on DL20 | Can it be fixed, and does the fix transfer across query sets? | Free | Anupam |
+| **X3** | Re-run E2 with calibrated Stage 2 scores | Does displacement correlation improve? Does inter-method disagreement shrink? | Free | Shubham |
+| **X4** | Use calibrated scores to pick P2's truncation point N | **Closes the loop** — calibration determines where to cut, and the cut is the second architecture | Free | Chaitanya |
+
+X4 is why this is an extension rather than a second project. The core result shows attribution depends on where Stage 2's input is truncated; the extension shows how to choose that truncation point in a principled way. Diagnosis then prescription.
+
+The extension is also strategically useful: calibrated reranker scores are an implicit dependency of at least three other teams' projects (adaptive fusion needs comparable scores to fuse, latency-SLA design needs thresholds, candidate-depth prediction needs a confidence signal).
+
+### Optional, only if time permits
+
+| # | Experiment | Why it is optional |
+|---|---|---|
+| O1 | Second paradigm — DPR→MiniLM cascade, confirming degeneracy is not BM25-specific | Strengthens generality but needs a dense index, the one real compute risk |
+| O2 | Permeable gate via adaptive re-ranking (`pyterrier_adaptive`) as a third architecture | Conceptually the richest architecture, but **check first whether a precomputed MS MARCO corpus graph is downloadable** — building one requires dense embeddings over 8.8M passages and would reintroduce the indexing cost |
+| O3 | Query-type slicing over the 97 annotated TREC-DL queries | Nice analysis, not load-bearing |
+| O4 | MonoT5 as a stronger Stage 2 | ~2 h GPU; tests whether reranker strength shifts the balance |
+| O5 | Cross-domain check on one BEIR subset | Generalisation |
 
 ### Minimum viable project
 
-One cascade (BM25→MiniLM) + one fusion pipeline (RRF over BM25+DPR) + `gated` synthetic + two methods + `remove_stage2` as ground truth + **E0**.
+**P1 + E0 + `gated` synthetic + two methods + `remove_stage2`.** One BM25 index, one reranking pass, no dense retrieval. That delivers RQ1, RQ2 and contribution C1 — the degeneracy result, which is the strongest novel claim.
 
-That alone establishes RQ1 and RQ2 and demonstrates architecture-dependence, which is the novel claim. Everything else is extension. E0 in particular is nearly free and delivers C1.
+Adding **E3** (free) delivers C2, architecture-dependence. Adding **X1–X4** (free) delivers the prescriptive half. The entire core and extension run on one Lucene index and one cached reranking pass.
 
 ---
 
@@ -143,20 +183,25 @@ That alone establishes RQ1 and RQ2 and demonstrates architecture-dependence, whi
 | | Anupam | Shubham | Chaitanya |
 |---|---|---|---|
 | **Shared** | `schema.py`, `reranker.py`, `logger.py` ✅ | `evaluation.py` ✅ | query-type annotations |
-| **Retrievers** | BM25 | DPR, Contriever (ColBERT only if compute allows) | Fusion (RRF over BM25+DPR) |
-| **Architectures** | Cascade (reference), **adaptive re-ranking (permeable gate)** | — | **Fusion** |
+| **Pipelines** | BM25 index + **P1 (cascade)**, Stage 2 score cache | — | **P2 (truncated rerank)** + the N sweep |
 | **Methods** | rank-delta, inclusion-ordering | stage-Shapley, reranker-LIME | — |
 | **Synthetic** | all settings; `gated` first | — | — |
-| **Experiments** | E0, E5, E8 | E1, E2, E4 | E3, E6, E7, E9 |
-| **Other** | MonoT5 wrapper | **Literature review — now urgent, see §9** | Visualisation, debugger, **report + presentation lead** |
+| **Core experiments** | E0, E4 | E1, E2 | E3 |
+| **Extension** | X1, X2 (calibration measurement + fitting) | X3 (attribution under calibrated scores) | X4 (calibrated truncation point) |
+| **Optional** | O1 (DPR), O2 (adaptive re-ranking), O4 (MonoT5) | — | O3, O5 |
+| **Other** | — | **Literature review — now urgent, see §9** | Visualisation, debugger, **report + presentation lead** |
 
-**Changes from the original division.** Anupam drops SPLADE and picks up adaptive re-ranking instead, plus E0 and E5. Shubham drops ColBERT to a stretch goal and substitutes Contriever. Chaitanya's hybrid retriever is promoted from "another paradigm" to "the fusion architecture," which makes it load-bearing for E3 rather than supplementary.
+**Changes from the original division.** Nobody now owns a dense index as a core deliverable. Anupam drops SPLADE, ColBERT and the adaptive-re-ranking architecture, picking up the BM25 cascade, the score cache, E0, E4 and the calibration measurement. Shubham drops DPR, ColBERT and Contriever from the core and concentrates on the two methods, E1, E2 and the literature review. Chaitanya owns P2 and the truncation sweep — which is the core novelty experiment — instead of a fourth retriever.
 
-**Critical path.** Anupam's `gated` synthetic data by end of week 2 unblocks Shubham's E1 and Chaitanya's visualisation work. Chaitanya's fusion pipeline is now on the critical path for E3, the core novelty experiment, so it should move earlier than the original week 3–6 slot.
+**Critical path, now much shorter.** Anupam's BM25 index and cached Stage 2 scores unblock everything downstream, including Chaitanya's entire truncation sweep, since every N is a subset of that one cached run. The `gated` synthetic generator unblocks Shubham's E1 in parallel and needs no index at all. Two artifacts gate the whole project, both deliverable in week 2–3.
+
+**Load concern worth flagging.** Shubham's verticals are now lighter than the others', while his literature review has become more urgent given the Pothuru finding. If the team wants to rebalance, O1 (the DPR cascade) is the natural thing to hand him, since it is the one optional item that strengthens a core claim rather than adding an analysis.
 
 ---
 
 ## 7. Hardware and compute requirements
+
+> **Under the reduced scope of §5, the core result and the full extension need one 2.6 GB prebuilt Lucene index and one ~5-minute reranking pass on a T4.** Everything else — E0, E3's entire truncation sweep, E4, and X1–X4 — is free, because it reads cached Stage 2 scores. The estimates below describe the full original scope and now apply only to the optional items O1–O5.
 
 ### Headline: indexing is the bottleneck, not reranking
 
@@ -192,8 +237,8 @@ Free Colab provides roughly 12–13 GB RAM. A 13.5 GB fp16 flat dense index does
 | Full cascade run (97 queries × 1000, MiniLM) | ~5 min |
 | All three architectures × three paradigms | ~45 min |
 | `remove_gating` at K=5000 (4 pipelines, deterministic, no seeds) | ~1.8 hours |
-| E6 (K = 100, 500, 1000) | **Free** — smaller K is a subset of the cached K=1000 scores |
-| E8 MonoT5 (220M params, seq2seq, ~30–60 pairs/sec) | ~1.5–2 hours |
+| E3 truncation sweep, plus any K ablation | **Free** — every truncation point N and every smaller K is a subset of the cached K=1000 scores |
+| O4 MonoT5 (220M params, seq2seq, ~30–60 pairs/sec) | ~1.5–2 hours |
 | `remove_stage2` | **Free** — reuses Stage 1 ranks, no reranking |
 | E0 degeneracy confirmation | **Free** — scores are provably unchanged |
 
@@ -201,14 +246,16 @@ Total recurring GPU need is roughly **4–6 hours**, which free tier handles com
 
 ### Minimum viable hardware
 
-**A laptop plus free Colab is sufficient for the MVP.** Synthetic generation needs no GPU at all. BM25 runs on CPU with a 2.6 GB prebuilt index. MiniLM reranking of 97 queries runs on free T4 in minutes, or on CPU overnight. The fusion architecture adds nothing — it reuses BM25 and DPR output.
+**A laptop plus free Colab covers the entire reduced scope — core and extension.** Synthetic generation needs no GPU. BM25 runs on CPU with a 2.6 GB prebuilt index. MiniLM reranking of 97 queries × 1000 candidates runs on a free T4 in about five minutes, or on CPU overnight. P2's truncation sweep, E0, E4 and all of X1–X4 read the cached scores and need no GPU at all.
+
+Institutional compute (S8) now matters only for the optional items — the DPR cascade (O1), adaptive re-ranking (O2) and MonoT5 (O4). It is no longer a prerequisite for the project's main claims, which is the point of the reduction.
 
 ### Recommendations
 
 1. **Ask about institutional compute now** (supervisor question S8). IIIT-H lab or cluster access would remove the ColBERT constraint entirely and is worth asking about in week 2, not week 6.
 2. **Pre-commit the ColBERT decision.** Agree now that ColBERT is attempted only with institutional compute, and that Contriever is the default. Deciding under pressure in week 6 is how projects lose a fortnight.
 3. **Persist indexes outside the session.** Colab storage is ephemeral. Mount Google Drive (15 GB free; ~100 GB for a small monthly fee) or use institutional storage. Re-downloading a 13 GB index every session will dominate everyone's time.
-4. **Cache Stage 2 scores keyed by `(query_id, doc_id, reranker)`.** The reranker's score is independent of Stage 1 entirely — which is the whole point of §1 — so every architecture, every K ablation and every intervention that preserves the candidate set can reuse the same cached scores. This single optimisation makes E6 free and cuts the architecture sweep substantially.
+4. **Cache Stage 2 scores keyed by `(query_id, doc_id, reranker)`.** The reranker's score is independent of Stage 1 entirely — which is the whole point of §1 — so every architecture, every K ablation and every intervention that preserves the candidate set can reuse the same cached scores. This single optimisation is what makes E3's entire truncation sweep, E0, E4 and X1–X4 free, and it is the reason the reduced scope needs only one reranking pass.
 
 ---
 
@@ -217,7 +264,10 @@ Total recurring GPU need is roughly **4–6 hours**, which free tier handles com
 | Risk | Severity | Mitigation |
 |---|---|---|
 | **Literature velocity** — three closely related papers appeared in six months (CausalFlow May 2026, Causal Agent Replay June 2026, Pothuru Aug 2026) | High | Forward-citation chaining on Rank-LIME, RankingSHAP and the Anand survey **in the next two weeks**, not at week 8. C1 and C2 are structural claims that survive most new empirical papers. |
-| ColBERT indexing infeasible on free tier | High | Pre-committed Contriever fallback (§7). Three paradigms is sufficient. |
+| **Scope reduction leaves the result looking thin** — one retriever, one index | Medium | The truncation sweep (E3) produces a *curve*, not a single contrast, which is more evidence than a second paradigm would give. O1 (DPR cascade) is the designated answer if a reviewer or the supervisor asks for paradigm generality, and it is one prebuilt index away. |
+| Dense indexing infeasible on free tier | **Now low** | Removed from the core result entirely (§5). Affects only O1 and O2. |
+| **Collision with the *adaptive hybrid fusion* team** | Medium | Fusion architecture dropped from the plan. Raise with the TA early anyway, since both projects touch multi-stage pipeline composition |
+| O2's corpus graph may not be downloadable | Low | Check before attempting; truncation (P2) already provides the non-cascade architecture, so O2 is purely additive |
 | `remove_gating` confound not separable | Medium | Report as confounded; use `remove_stage2` as primary ground truth; consider a Stage-2-degradation control that reranks 5000 candidates but measures only the original 1000 |
 | Relaxing the sum-to-one constraint breaks teammates' code | Medium | Decide in the week-2 meeting before anyone writes against it |
 | Shapley's `v({S2}) = 0` bias (T6) invalidates one comparison column | Medium | Resolve before implementation; consider seeding `v({S2})` from the K=5000 rerank already computed for `remove_gating` |
@@ -252,6 +302,10 @@ Total recurring GPU need is roughly **4–6 hours**, which free tier handles com
 
 The project measures, for each document, **which stage's behaviour its final position was contingent on** — not by decomposing a score into additive shares, but by intervening on each stage and observing what moves.
 
-The central finding available to us is that this question is **architecture-dependent**: in a pure cascade, Stage 1's contribution collapses to candidate-set membership and the conventional α-decomposition is undefined, while under score fusion and permeable-gate architectures the full attribution question is live. That claim is structural rather than empirical, which makes it robust to the fast-moving literature around us, and it was not in the original roadmap — it emerged from interrogating why the reranker never reads the retriever's scores.
+The central finding available to us is that this question is **architecture-dependent**: in a pure cascade, Stage 1's contribution collapses to candidate-set membership and the conventional α-decomposition is undefined. Truncate the reranker's input, as production systems routinely do, and Stage 1's ordering becomes live again — continuously, as a function of where you truncate. That claim is structural rather than empirical, which makes it robust to the fast-moving literature around us, and it was not in the original roadmap. It emerged from interrogating why the reranker never reads the retriever's scores.
 
-The infrastructure is built and reviewed. The next two weeks are the `gated` synthetic generator, the BM25 index, E0, and the decisions in §9.
+The extension asks whether Stage 2's scores are even on a meaningful scale, and uses the answer to prescribe where to truncate — turning the diagnosis into a decision.
+
+**Scope, after reduction:** two pipelines sharing one prebuilt index, one cached reranking pass, no dense retrieval. The entire core result and the full extension run on a laptop plus free Colab. The two artifacts that gate everything — the BM25 index with cached Stage 2 scores, and the `gated` synthetic generator — are both week 2–3 deliverables, and neither depends on the other.
+
+The infrastructure is built and reviewed. Next: those two artifacts, E0, and the decisions in §9.
