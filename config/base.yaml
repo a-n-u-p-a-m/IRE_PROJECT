@@ -1,0 +1,175 @@
+# base.yaml - THE DESIGN FREEZE.
+#
+# Proposal section 11 requires every choice that can move a measured effect to
+# be fixed before main results are inspected. This file is that freeze. It is
+# hashed into a 12-character fingerprint that is stamped on every result table
+# and every provenance record, so any number can be traced to the exact
+# settings that produced it.
+#
+# Changing a value after seeing results is legitimate ONLY when the run is
+# explicitly labelled a sensitivity analysis, and then it goes in a NEW named
+# config file - never an edit to this one.
+
+seed: 42
+
+# Deterministic tie-breaking. Non-deterministic ties surface downstream as
+# spurious nonzero effects and as survivors with E_gate < 0.
+tie_break: doc_id
+
+# ──────────────────────────────────────────────────────────────────────
+dataset:
+  name: trec_dl_2019_2020
+  collection: msmarco-v1-passage
+  # Granularity matters for the Stage-2 cost model. "passage" means one
+  # cross-encoder inference per scored unit. "document" requires segmentation
+  # and aggregation to be declared below, and the passage-level call count is
+  # what must be reported - never the document count.
+  granularity: passage
+  segmentation: null        # e.g. {window: 256, stride: 128, aggregate: max}
+  queries_file: data/queries.tsv
+  qrels_file: data/qrels.parquet
+  # Splits are by QUERY, never by query-document row.
+  split_fractions: {train: 0.5, val: 0.2, test: 0.3}
+
+# ──────────────────────────────────────────────────────────────────────
+universe:
+  # Every Stage-1 system used in a core comparison MUST appear here, or its
+  # candidate set can fall outside U_q and the whole counterfactual frame
+  # breaks. Adding a retriever later means regenerating U_q and recomputing
+  # every effect built against the old one.
+  # dpr = castorini/cosdpr-distil: DPR architecture trained on MS MARCO, exact
+  # search over a verified float16 index (TREC-DL19 nDCG@10 0.706 vs Pyserini's
+  # published 0.725; R@1000 0.822 vs 0.820). Replaces ANCE as the dense system.
+  sources: [bm25, dpr]
+  optional_sources: [splade]
+  depth_m: 5000             # top-M retained per source
+  max_size: 15000           # hard cap on |U_q| after the union
+
+# ──────────────────────────────────────────────────────────────────────
+cascade:
+  stage1_systems: [bm25, dpr]
+  candidate_depths: [100, 500, 1000]
+  final_cutoff_k: 10
+  cutoff_sensitivity: [5, 20]
+
+stage2:
+  model: cross-encoder/ms-marco-MiniLM-L-12-v2
+  max_length: 512
+  batch_size: 64
+  precision: float32
+  # false invalidates the survivor monotonicity result for E_gate; a listwise
+  # Stage 2 is a different estimand and must be validated non-strictly.
+  pointwise: true
+
+# ──────────────────────────────────────────────────────────────────────
+budget:
+  # World D. For t=1 to be the conventional cascade baseline, B must equal the
+  # candidate depth. If b_equals_kc is false, t=1 is only a candidate-only
+  # budget baseline and every report must say so.
+  b_equals_kc: true
+  b_absolute: null          # only read when b_equals_kc is false
+  t_grid: [1.0, 0.9, 0.75, 0.5]
+  t_grid_optional: [0.25, 0.0]
+  outsider_policies: [boundary, alternative, random]
+  # The retained candidate portion is the top floor(t*B) of C_q by Stage-1
+  # rank. That rank is used ONLY to choose the submitted subset; it is never
+  # passed to Stage 2, which scores each query-document pair independently.
+  candidate_portion_rule: stage1_rank
+  alternative_source: dpr   # which retriever supplies the 'alternative' policy
+  seeds: [42, 43, 44]       # repeats for randomised policies
+
+# ──────────────────────────────────────────────────────────────────────
+utility:
+  kind: dcg                 # dcg | topk | rbp
+  sensitivity_kinds: [topk, rbp]
+  rbp_persistence: 0.8
+  # EXPLICIT gain map, not a formula. For TREC DL passage ranking grade 1 means
+  # "Related" rather than relevant, so 2^rel-1 would hand every merely-related
+  # passage a gain of 1. Because every estimand here is a DIFFERENCE of
+  # utilities, that error would inflate effects systematically rather than
+  # cancelling out.
+  gain_map: {0: 0.0, 1: 0.0, 2: 3.0, 3: 7.0}
+  # The headline ranking metric may use official qrel conventions instead. If
+  # these two differ, both must be reported and the difference stated.
+  headline_metric_gain_map: {0: 0.0, 1: 1.0, 2: 3.0, 3: 7.0}
+
+qrels:
+  # 'unknown' is the only accepted value. The no-gate universe is far larger
+  # than the judgment pool, so treating unjudged as non-relevant would
+  # fabricate the evidence E_gate depends on.
+  unjudged: unknown
+
+# ──────────────────────────────────────────────────────────────────────
+reference_subset:
+  # Which queries receive full no-gate scoring. Chosen by a stated rule, never
+  # by convenience: picking queries with small |U_q| biases towards queries
+  # where the retrievers agree, which is exactly where gate effects are
+  # smallest.
+  size: 25                  # set by the H7 power simulation, not by compute alone
+  strategy: stratified_universe_size   # random | stratified_universe_size | stratified_jaccard
+  n_strata: 5
+  seed: 42
+
+# ──────────────────────────────────────────────────────────────────────
+diagnosis:
+  # Query-level labelling for H7. tau gates which queries count as
+  # gate-sensitive, so it is the parameter most exposed to post-hoc tuning and
+  # it is frozen here.
+  tau_query: 0.05
+  # Separate name, separate scale: this one thresholds per-DOCUMENT effect
+  # magnitude for the categorical presentation labels only.
+  tau_document: 0.05
+  # R_q is defined in the proposal as an absolute value, which merges
+  # "reranker helps a lot" with "reranker actively harms". The signed value is
+  # recorded alongside so the two can be separated in analysis without
+  # changing the frozen labelling rule.
+  record_signed_rerank_sensitivity: true
+
+# ──────────────────────────────────────────────────────────────────────
+predictors:
+  boundary_budgets: [25, 100]
+  outsider_budgets: [0, 20, 50, 100, 500]
+  top_m: 20
+  bootstrap_iterations: 1000
+  bootstrap_alpha: 0.05
+  # Pooled statistics are secondary everywhere and forbidden as a headline for
+  # E_gate and Delta_t, whose signs are fixed by membership.
+  report_pooled: false
+
+hashing:
+  # Optional extension only. Stays disabled until the exact method is confirmed
+  # and a cost-feasibility check passes.
+  enabled: false
+  method: null              # lsh | leh | neural | null
+  representation_source: null
+  bits: null
+
+# ──────────────────────────────────────────────────────────────────────
+synthetic:
+  n_queries: 100
+  n_docs_per_query: 2000
+  # Quantiles of the latent relevance variable giving graded labels {0,1,2,3}.
+  # Taken on the standard normal, not the sample, so the label distribution
+  # does not drift between regimes or sample sizes.
+  relevance_quantiles: [0.80, 0.93, 0.98]
+  regimes: [strong_stages, weak_retriever, weak_reranker, gate_stress,
+            stage_mismatch, budget_stress]
+  gate_stress_planted: 10
+  budget_stress_outsiders: 20
+
+power:
+  # H7 is the only test that gives the attribution external validity, and it
+  # runs only on the reference subset. Its required sample size is established
+  # on synthetic data BEFORE GPU budget is committed.
+  target_power: 0.8
+  alpha: 0.05
+  candidate_sizes: [10, 15, 20, 25, 30, 40, 50]
+  n_simulations: 200
+
+paths:
+  data: data
+  runs: runs
+  universe: data/universe.parquet
+  cache: cache/stage2.sqlite
+  effects: effects
+  analysis: analysis

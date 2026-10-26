@@ -1,0 +1,21 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # long lines are usually explanatory comments
+    "B008",
+    # zip() without strict=. Not applied blanket-wise: most zips here are over
+    # equal-length structures by construction, but a few are deliberately
+    # offset (zip(xs, xs[1:])) and strict=True would break those.
+    "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]        # sys.path insertion must precede the imports

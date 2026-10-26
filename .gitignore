@@ -1,0 +1,60 @@
+# Generated artefacts.
+#
+# Two rules decide what lives here:
+#   * anything large and regenerable is ignored;
+#   * anything that makes a number TRACEABLE is kept, however small.
+#
+# Two git details this file depends on:
+#   * `dir/*`, not `dir/`. Git will not descend into an excluded directory, so
+#     `dir/` makes every negation below it dead.
+#   * NO TRAILING COMMENTS. `#` only starts a comment at the start of a line;
+#     anywhere else it becomes part of the pattern and the rule matches nothing.
+
+# Run tables are ~6-8 MB each and ARE committed: that makes "which run built
+# the universe" answerable by commit hash instead of by a chat message.
+runs/*
+!runs/.gitkeep
+!runs/*.parquet
+!runs/*manifest*.json
+
+# The sqlite cache is far too large for git; only its manifest is kept.
+cache/*
+!cache/.gitkeep
+!cache/*manifest*.json
+
+effects/*
+!effects/.gitkeep
+!effects/*manifest*.json
+
+analysis/*
+!analysis/.gitkeep
+!analysis/*manifest*.json
+
+runs_mock/
+
+data/*.parquet
+data/*.frozen
+data/queries.tsv
+data/qrels.txt
+
+# The query split and the reference subset ARE committed: both are small, both
+# are contracts other members depend on, and committing the materialised file
+# turns "should be identical" into "is identical". Listed here as a reminder
+# that they are deliberately NOT ignored.
+#   data/query_split.json
+#   data/reference_subset.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
