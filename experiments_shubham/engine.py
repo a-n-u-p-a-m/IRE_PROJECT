@@ -30,7 +30,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -168,6 +168,50 @@ def run_budget(
 # The whole frozen grid
 # ──────────────────────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class GridTable:
+    """One block of the grid: stage effects at a K_c, or budget effects at a
+    (K_c, policy)."""
+
+    name: str
+    k_c: int
+    policy: str | None
+    effects: pd.DataFrame
+
+
+def grid_t(cfg: FrozenConfig, include_optional_t: bool = False) -> tuple[float, ...]:
+    t_grid = tuple(cfg.t_grid)
+    if include_optional_t:
+        t_grid += tuple(cfg.t_grid_optional)
+    return t_grid
+
+
+def iter_grid(
+    queries: Sequence[QueryInputs],
+    cfg: FrozenConfig,
+    settings: EffectSettings,
+    budget_for: Callable[[int], int] | None = None,
+    include_optional_t: bool = False,
+    strict: bool = True,
+) -> Iterator[GridTable]:
+    """
+    Every K_c, and for world D every policy and seed, one table at a time.
+
+    One table per K_c for the stage effects and per (K_c, policy) for the
+    budget effects keeps each one small enough to validate in memory.
+    """
+    budget_for = budget_for or cfg.budget_for
+    t_grid = grid_t(cfg, include_optional_t)
+    system = settings.stage1_system
+    for k_c in cfg.candidate_depths:
+        stage = run_worlds(queries, k_c, settings, strict)
+        yield GridTable(f"{system}_stage_kc{k_c}", k_c, None, stage)
+        for policy in cfg.outsider_policies:
+            budget = run_budget(queries, k_c, budget_for(k_c), t_grid, policy,
+                                cfg.budget_seeds, settings, strict)
+            yield GridTable(f"{system}_budget_kc{k_c}_{policy}", k_c, policy, budget)
+
+
 def run_grid(
     queries: Sequence[QueryInputs],
     cfg: FrozenConfig,
@@ -178,37 +222,21 @@ def run_grid(
     strict: bool = True,
     extra_manifest: Mapping | None = None,
 ) -> dict[str, Path]:
-    """
-    Every K_c, and for world D every policy and seed, written one file each.
-
-    One file per (K_c) for the stage effects and per (K_c, policy) for the
-    budget effects keeps each table small enough to validate in memory.
-    """
+    """The whole grid, written one validated Parquet file per table."""
     out_dir = Path(out_dir)
     budget_for = budget_for or cfg.budget_for
-    t_grid = tuple(cfg.t_grid)
-    if include_optional_t:
-        t_grid += tuple(cfg.t_grid_optional)
+    t_grid = grid_t(cfg, include_optional_t)
     system = settings.stage1_system
 
     written: dict[str, Path] = {}
     summaries = []
     start = time.perf_counter()
-    for k_c in cfg.candidate_depths:
-        stage = run_worlds(queries, k_c, settings, strict)
-        name = f"{system}_stage_kc{k_c}"
-        written[name] = save(stage, out_dir / f"{name}.parquet", "effect", strict)
-        summaries.append(summarise(stage))
-        logger.info("%s: %d rows", name, len(stage))
-
-        budget_b = budget_for(k_c)
-        for policy in cfg.outsider_policies:
-            budget = run_budget(queries, k_c, budget_b, t_grid, policy,
-                                cfg.budget_seeds, settings, strict)
-            name = f"{system}_budget_kc{k_c}_{policy}"
-            written[name] = save(budget, out_dir / f"{name}.parquet", "effect", strict)
-            summaries.append(summarise(budget))
-            logger.info("%s: %d rows", name, len(budget))
+    for table in iter_grid(queries, cfg, settings, budget_for, include_optional_t,
+                           strict):
+        path = out_dir / f"{table.name}.parquet"
+        written[table.name] = save(table.effects, path, "effect", strict)
+        summaries.append(summarise(table.effects))
+        logger.info("%s: %d rows", table.name, len(table.effects))
 
     summary_path = out_dir / f"{system}_summary.csv"
     pd.concat(summaries, ignore_index=True).to_csv(summary_path, index=False)
@@ -234,10 +262,14 @@ def run_grid(
 
 def synthetic_frame(cfg: FrozenConfig, regime: str, n_queries: int | None = None,
                     n_docs: int | None = None, stress_kc: int | None = None,
-                    seed: int | None = None) -> pd.DataFrame:
+                    seed: int | None = None, stress: bool = True,
+                    far: bool = False) -> pd.DataFrame:
     """
     One generated regime, with its stress manipulation applied at `stress_kc`
     (default: the largest candidate depth) for gate_stress and budget_stress.
+
+    `far` buries the gate-stress documents far below K_c instead of just under
+    it; `stress=False` gives the same draw with no manipulation, as a control.
     """
     syn = cfg.synthetic
     params = params_for_regime(
@@ -245,10 +277,12 @@ def synthetic_frame(cfg: FrozenConfig, regime: str, n_queries: int | None = None
         syn["relevance_quantiles"], seed=cfg.seed if seed is None else seed,
     )
     df = generate(params)
+    if not stress:
+        return df
     stress_kc = stress_kc or max(cfg.candidate_depths)
     if regime == "gate_stress":
         df = apply_gate_stress(df, stress_kc, syn["gate_stress_planted"],
-                               seed=params.seed)
+                               seed=params.seed, far=far)
     elif regime == "budget_stress":
         df = apply_budget_stress(df, stress_kc, syn["budget_stress_outsiders"],
                                  seed=params.seed)

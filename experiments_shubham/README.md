@@ -40,3 +40,26 @@ alternative run once with `seed=NA`.
 
 Writes one effect table per K_c (stage effects) and per (K_c, policy) (budget
 effects), a summary CSV and a manifest to `effects/synthetic/<regime>/`.
+
+## E1 - synthetic implementation validation
+
+| file | what it does |
+|---|---|
+| `synthetic_e1.py` | the engine on all six regimes plus far-buried gate stress and an unstressed control, checked two ways |
+| `tests/test_synthetic_e1.py` | re-derivation against the toy fixture, exact recovery on a small grid, the testability guard |
+
+1. **Exact recovery.** Every effect is re-derived in plain numpy, without
+   `shared.worlds`, `shared.effects`, `shared.allocation` or `shared.ordering`,
+   and must match the engine row for row (rows, ranks, strata, effects within 1e-12).
+2. **Effect sanity.** Directional expectations declared in `EXPECTATIONS` before
+   the run: a weak retriever makes the gate cost more, a weak reranker helps less
+   and harms more queries, the boundary probe finds near-buried documents but
+   misses far-buried ones, budget-stress outsiders reach the top-k and push
+   retained candidates down.
+
+    python -m experiments_shubham.synthetic_e1                  # full size, ~15 min
+    python -m experiments_shubham.synthetic_e1 --n-queries 10   # quick, ~2 min
+
+Writes `e1_report.md`, `e1_checks.csv`, `e1_stats.csv` and `e1_recovery.csv` to
+`effects/synthetic/`, and the committed record `effects/e1_manifest.json`.
+Exits non-zero if any check fails.
