@@ -1,0 +1,240 @@
+{
+  "timestamp": "2026-10-27T15:37:31+0530",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "shubham",
+  "git_commit": "479eeee7903532d545af15c33549c7eee0452438",
+  "python": "3.13.5",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.1.3",
+  "torch": "2.11.0",
+  "cuda": null,
+  "gpu": null,
+  "experiment": "H7 power simulation (H2)",
+  "pool_size": 1000,
+  "universe_sizes": [
+    2000,
+    8000
+  ],
+  "reference_sizes": [
+    10,
+    15,
+    20,
+    25,
+    30,
+    40,
+    50,
+    97
+  ],
+  "alignment_range": [
+    0.45,
+    0.85
+  ],
+  "noise_range": [
+    0.15,
+    0.6
+  ],
+  "tau_query": 0.05,
+  "power": {
+    "target_power": 0.8,
+    "alpha": 0.05,
+    "candidate_sizes": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      40,
+      50
+    ],
+    "n_simulations": 200
+  },
+  "label_shares": {
+    "U=2000|K_c=100": {
+      "gate_sensitive": 0.071,
+      "rerank_sensitive": 0.923,
+      "mixed_stable": 0.006
+    },
+    "U=2000|K_c=500": {
+      "gate_sensitive": 0.036,
+      "rerank_sensitive": 0.961,
+      "mixed_stable": 0.003
+    },
+    "U=2000|K_c=1000": {
+      "gate_sensitive": 0.02,
+      "rerank_sensitive": 0.974,
+      "mixed_stable": 0.006
+    },
+    "U=8000|K_c=100": {
+      "gate_sensitive": 0.061,
+      "rerank_sensitive": 0.931,
+      "mixed_stable": 0.008
+    },
+    "U=8000|K_c=500": {
+      "gate_sensitive": 0.046,
+      "rerank_sensitive": 0.945,
+      "mixed_stable": 0.009
+    },
+    "U=8000|K_c=1000": {
+      "gate_sensitive": 0.035,
+      "rerank_sensitive": 0.96,
+      "mixed_stable": 0.005
+    }
+  },
+  "headline_power": {
+    "continuous|alternative|U=2000": {
+      "10": 0.5,
+      "15": 0.67,
+      "20": 0.785,
+      "25": 0.89,
+      "30": 0.895,
+      "40": 0.975,
+      "50": 0.995,
+      "97": 1.0
+    },
+    "continuous|alternative|U=8000": {
+      "10": 0.465,
+      "15": 0.675,
+      "20": 0.75,
+      "25": 0.915,
+      "30": 0.91,
+      "40": 0.97,
+      "50": 0.98,
+      "97": 1.0
+    },
+    "continuous|boundary|U=2000": {
+      "10": 0.33,
+      "15": 0.51,
+      "20": 0.645,
+      "25": 0.72,
+      "30": 0.76,
+      "40": 0.855,
+      "50": 0.945,
+      "97": 0.995
+    },
+    "continuous|boundary|U=8000": {
+      "10": 0.255,
+      "15": 0.3,
+      "20": 0.34,
+      "25": 0.5,
+      "30": 0.56,
+      "40": 0.62,
+      "50": 0.75,
+      "97": 0.955
+    },
+    "continuous|random|U=2000": {
+      "10": 0.245,
+      "15": 0.34,
+      "20": 0.435,
+      "25": 0.445,
+      "30": 0.565,
+      "40": 0.685,
+      "50": 0.75,
+      "97": 0.945
+    },
+    "continuous|random|U=8000": {
+      "10": 0.135,
+      "15": 0.15,
+      "20": 0.145,
+      "25": 0.22,
+      "30": 0.25,
+      "40": 0.33,
+      "50": 0.34,
+      "97": 0.525
+    },
+    "group|alternative|U=2000": {
+      "10": 0.005,
+      "15": 0.025,
+      "20": 0.025,
+      "25": 0.025,
+      "30": 0.075,
+      "40": 0.095,
+      "50": 0.135,
+      "97": 0.285
+    },
+    "group|alternative|U=8000": {
+      "10": 0.01,
+      "15": 0.065,
+      "20": 0.06,
+      "25": 0.105,
+      "30": 0.2,
+      "40": 0.21,
+      "50": 0.335,
+      "97": 0.745
+    },
+    "group|boundary|U=2000": {
+      "10": 0.0,
+      "15": 0.02,
+      "20": 0.02,
+      "25": 0.05,
+      "30": 0.06,
+      "40": 0.11,
+      "50": 0.13,
+      "97": 0.285
+    },
+    "group|boundary|U=8000": {
+      "10": 0.005,
+      "15": 0.01,
+      "20": 0.015,
+      "25": 0.045,
+      "30": 0.055,
+      "40": 0.035,
+      "50": 0.04,
+      "97": 0.195
+    },
+    "group|random|U=2000": {
+      "10": 0.0,
+      "15": 0.015,
+      "20": 0.02,
+      "25": 0.035,
+      "30": 0.045,
+      "40": 0.065,
+      "50": 0.095,
+      "97": 0.21
+    },
+    "group|random|U=8000": {
+      "10": 0.0,
+      "15": 0.0,
+      "20": 0.0,
+      "25": 0.025,
+      "30": 0.02,
+      "40": 0.02,
+      "50": 0.02,
+      "97": 0.075
+    }
+  },
+  "recommendation": {
+    "k_c": 1000,
+    "t": 0.5,
+    "target_power": 0.8,
+    "group": {
+      "policies": [
+        "boundary",
+        "alternative",
+        "random"
+      ],
+      "smallest_per_setting": {
+        "boundary@2000": null,
+        "boundary@8000": null,
+        "alternative@2000": null,
+        "alternative@8000": null,
+        "random@2000": null,
+        "random@8000": null
+      },
+      "reference_size": null
+    },
+    "continuous": {
+      "policies": [
+        "boundary",
+        "alternative"
+      ],
+      "smallest_per_setting": {
+        "boundary@2000": 40,
+        "boundary@8000": 97,
+        "alternative@2000": 25,
+        "alternative@8000": 25
+      },
+      "reference_size": 97
+    }
+  },
+  "seconds": 1075.5
+}

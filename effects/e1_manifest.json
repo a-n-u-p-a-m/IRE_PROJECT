@@ -1,0 +1,87 @@
+{
+  "timestamp": "2026-10-27T15:36:44+0530",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "shubham",
+  "git_commit": "479eeee7903532d545af15c33549c7eee0452438",
+  "python": "3.13.5",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.1.3",
+  "torch": "2.11.0",
+  "cuda": null,
+  "gpu": null,
+  "experiment": "E1",
+  "n_queries": 100,
+  "n_docs": 2000,
+  "variants": [
+    "strong_stages",
+    "weak_retriever",
+    "weak_reranker",
+    "stage_mismatch",
+    "gate_stress",
+    "gate_stress_far",
+    "budget_stress",
+    "stress_control"
+  ],
+  "checks": [
+    {
+      "check": "exact_recovery",
+      "expectation": "engine == re-derivation",
+      "passed": true,
+      "detail": "81600000 rows, max |diff| 0.0e+00"
+    },
+    {
+      "check": "weak_retriever_gate_cost_higher",
+      "expectation": "weak retriever: the gate costs at least as much as under strong stages (mean per-query sum of E_gate over non-survivors no higher) at every K_c, and strictly more at the smallest K_c",
+      "passed": true,
+      "detail": "K_c=100: -19.730 vs -5.716; K_c=500: -9.508 vs -0.393; K_c=1000: -3.710 vs 0.000"
+    },
+    {
+      "check": "weak_retriever_more_gating_failures",
+      "expectation": "weak retriever: at least as many gating failures per query as strong stages at every K_c, and strictly more at the smallest K_c",
+      "passed": true,
+      "detail": "K_c=100: 7.37 vs 2.76; K_c=500: 3.73 vs 0.26; K_c=1000: 1.52 vs 0.00"
+    },
+    {
+      "check": "weak_reranker_helps_less",
+      "expectation": "weak reranker: reranking gains less DCG per query than under strong stages, at every K_c",
+      "passed": true,
+      "detail": "K_c=100: -7.427 vs 1.859; K_c=500: -15.414 vs 0.123; K_c=1000: -17.838 vs -0.156"
+    },
+    {
+      "check": "weak_reranker_harms_more_queries",
+      "expectation": "weak reranker: a larger share of queries is harmed by reranking than under strong stages, at the stress K_c",
+      "passed": true,
+      "detail": "1.00 vs 0.46"
+    },
+    {
+      "check": "gate_stress_boundary_finds_planted",
+      "expectation": "gate stress (just below K_c): the boundary policy promotes at least 95% of the planted documents at the smallest t",
+      "passed": true,
+      "detail": "1.00"
+    },
+    {
+      "check": "gate_stress_far_boundary_misses",
+      "expectation": "gate stress (far below K_c): the boundary policy promotes fewer planted documents than the alternative policy at the smallest t",
+      "passed": true,
+      "detail": "boundary 0.00 vs alternative 0.91"
+    },
+    {
+      "check": "budget_stress_outsiders_reach_top_k",
+      "expectation": "budget stress: more promoted outsiders reach the final top-k than in the control, for every policy at the smallest t",
+      "passed": true,
+      "detail": "boundary: 9.23 vs 0.34; alternative: 9.26 vs 0.35; random: 9.17 vs 0.19"
+    },
+    {
+      "check": "budget_stress_retained_lose_more",
+      "expectation": "budget stress: retained candidates lose more utility than in the control, for every policy at the smallest t",
+      "passed": true,
+      "detail": "boundary: -20.998 vs 1.843; alternative: -21.032 vs 1.822; random: -20.922 vs 2.149"
+    }
+  ],
+  "revisions": [
+    "Before the first full-size run, after a 5-query trial: the two weak-retriever comparisons went from strict at every K_c to non-strict at every K_c and strict at the smallest, because where the gate removes nothing both regimes are exactly zero; and the policy checks gained the not-testable guard, because the trial's D_q was smaller than the outsider budget, so every policy promoted all of it.",
+    "After the first full-size run: 'weak_retriever_gate_costs_more' compared the NET per-query gate effect, DCG(pi_act) - DCG(pi_no1), and failed at K_c=1000 (weak retriever +0.021 vs strong stages 0.000). The net effect adds two opposite channels: the loss on documents the gate excludes (cost) and the gain for survivors shielded from strong competitors (protection). A weak retriever's gate has far more of both (K_c=1000: cost -3.710 vs 0.000, protection +3.732 vs 0.000), and they nearly cancel. Replaced by 'weak_retriever_gate_cost_higher', on the cost alone; the net effect and both channels stay in the stage-effects table."
+  ],
+  "seconds": 1029.0,
+  "report": "effects/synthetic/e1_report.md"
+}
