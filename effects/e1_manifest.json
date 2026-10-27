@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-10-27T15:15:01+0530",
+  "timestamp": "2026-10-27T15:36:44+0530",
   "config_fingerprint": "46d0807d8ed3",
   "owner": "shubham",
-  "git_commit": "f9def567bd13c97fbfc826ecaaf1289c8f275099",
+  "git_commit": "479eeee7903532d545af15c33549c7eee0452438",
   "python": "3.13.5",
   "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
   "numpy": "2.1.3",
@@ -82,6 +82,6 @@
     "Before the first full-size run, after a 5-query trial: the two weak-retriever comparisons went from strict at every K_c to non-strict at every K_c and strict at the smallest, because where the gate removes nothing both regimes are exactly zero; and the policy checks gained the not-testable guard, because the trial's D_q was smaller than the outsider budget, so every policy promoted all of it.",
     "After the first full-size run: 'weak_retriever_gate_costs_more' compared the NET per-query gate effect, DCG(pi_act) - DCG(pi_no1), and failed at K_c=1000 (weak retriever +0.021 vs strong stages 0.000). The net effect adds two opposite channels: the loss on documents the gate excludes (cost) and the gain for survivors shielded from strong competitors (protection). A weak retriever's gate has far more of both (K_c=1000: cost -3.710 vs 0.000, protection +3.732 vs 0.000), and they nearly cancel. Replaced by 'weak_retriever_gate_cost_higher', on the cost alone; the net effect and both channels stay in the stage-effects table."
   ],
-  "seconds": 929.5,
+  "seconds": 1029.0,
   "report": "effects/synthetic/e1_report.md"
 }
