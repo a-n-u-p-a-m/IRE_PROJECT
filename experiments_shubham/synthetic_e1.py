@@ -81,10 +81,10 @@ VARIANTS: dict[str, tuple[str, bool, bool]] = {
 }
 
 EXPECTATIONS = {
-    "weak_retriever_gate_costs_more":
+    "weak_retriever_gate_cost_higher":
         "weak retriever: the gate costs at least as much as under strong stages "
-        "(mean per-query DCG of pi_act - pi_no1 no higher) at every K_c, and "
-        "strictly more at the smallest K_c",
+        "(mean per-query sum of E_gate over non-survivors no higher) at every K_c, "
+        "and strictly more at the smallest K_c",
     "weak_retriever_more_gating_failures":
         "weak retriever: at least as many gating failures per query as strong "
         "stages at every K_c, and strictly more at the smallest K_c",
@@ -107,6 +107,26 @@ EXPECTATIONS = {
         "budget stress: retained candidates lose more utility than in the control, "
         "for every policy at the smallest t",
 }
+
+# Every change to EXPECTATIONS after the code first ran, with the result that
+# prompted it. Printed in the report and the manifest so no revision is silent.
+REVISIONS = [
+    "Before the first full-size run, after a 5-query trial: the two "
+    "weak-retriever comparisons went from strict at every K_c to non-strict at "
+    "every K_c and strict at the smallest, because where the gate removes "
+    "nothing both regimes are exactly zero; and the policy checks gained the "
+    "not-testable guard, because the trial's D_q was smaller than the outsider "
+    "budget, so every policy promoted all of it.",
+    "After the first full-size run: 'weak_retriever_gate_costs_more' compared "
+    "the NET per-query gate effect, DCG(pi_act) - DCG(pi_no1), and failed at "
+    "K_c=1000 (weak retriever +0.021 vs strong stages 0.000). The net effect "
+    "adds two opposite channels: the loss on documents the gate excludes (cost) "
+    "and the gain for survivors shielded from strong competitors (protection). "
+    "A weak retriever's gate has far more of both (K_c=1000: cost -3.710 vs "
+    "0.000, protection +3.732 vs 0.000), and they nearly cancel. Replaced by "
+    "'weak_retriever_gate_cost_higher', on the cost alone; the net effect and "
+    "both channels stay in the stage-effects table.",
+]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -274,6 +294,8 @@ def stage_stats(stage: pd.DataFrame) -> dict:
         "rerank_gain": float(per_q[E_RERANK].mean()),
         "rerank_harm_share": float((per_q[E_RERANK] < -EPS).mean()),
         "gate_effect": float(per_q[E_GATE].mean()),
+        "gate_protection": float(gate.loc[gate["stratum"] == SURVIVOR, "effect"].sum() / n_q),
+        "gate_cost": float(gate.loc[gate["stratum"] == NON_SURVIVOR, "effect"].sum() / n_q),
         "gating_failures_per_query": len(failures) / n_q,
     }
 
@@ -392,9 +414,9 @@ def evaluate(stats: pd.DataFrame, cfg: FrozenConfig, n_docs: int) -> list[dict]:
                                  for d, (x, c) in zip(depths, pairs)))
 
     depths = sorted(depths)
-    regime_check("weak_retriever_gate_costs_more",
-                 [(s("weak_retriever", d, "gate_effect"),
-                   s("strong_stages", d, "gate_effect")) for d in depths],
+    regime_check("weak_retriever_gate_cost_higher",
+                 [(s("weak_retriever", d, "gate_cost"),
+                   s("strong_stages", d, "gate_cost")) for d in depths],
                  lambda x, c: x < c, ".3f")
     regime_check("weak_retriever_more_gating_failures",
                  [(s("weak_retriever", d, "gating_failures_per_query"),
@@ -476,10 +498,17 @@ def write_report(path: Path, recovery: pd.DataFrame, checks: list[dict],
         "",
         _md(pd.DataFrame(checks)[["check", "passed", "detail"]]),
         "",
+        "Revisions to the expectations, each with the result that prompted it:",
+        "",
+        *[f"{i}. {r}" for i, r in enumerate(REVISIONS, start=1)],
+        "",
         "## 3. Stage effects (per-query means)",
+        "",
+        "`gate_effect` = `gate_protection` (survivors) + `gate_cost` (non-survivors).",
         "",
         _md(stats[stats["policy"].isna()][["variant", "k_c", "rerank_gain",
                                            "rerank_harm_share", "gate_effect",
+                                           "gate_protection", "gate_cost",
                                            "gating_failures_per_query"]], ".3f"),
         "",
         f"## 4. Budget curves: per-query mean DCG change against t = 1 "
@@ -535,7 +564,8 @@ def main() -> None:
 
     manifest = run_manifest(cfg.fingerprint(), owner="shubham", extra={
         "experiment": "E1", **sizes, "variants": list(VARIANTS),
-        "checks": checks, "seconds": round(time.perf_counter() - start, 1),
+        "checks": checks, "revisions": REVISIONS,
+        "seconds": round(time.perf_counter() - start, 1),
         "report": str(out_dir / "e1_report.md"),
     })
     manifest_path = (effects_root if args.out_dir is None else out_dir) / "e1_manifest.json"

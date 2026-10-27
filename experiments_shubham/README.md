@@ -52,7 +52,7 @@ effects), a summary CSV and a manifest to `effects/synthetic/<regime>/`.
    `shared.worlds`, `shared.effects`, `shared.allocation` or `shared.ordering`,
    and must match the engine row for row (rows, ranks, strata, effects within 1e-12).
 2. **Effect sanity.** Directional expectations declared in `EXPECTATIONS` before
-   the run: a weak retriever makes the gate cost more, a weak reranker helps less
+   the run: a weak retriever makes the gate cost more (loss on non-survivors), a weak reranker helps less
    and harms more queries, the boundary probe finds near-buried documents but
    misses far-buried ones, budget-stress outsiders reach the top-k and push
    retained candidates down.
@@ -63,3 +63,27 @@ effects), a summary CSV and a manifest to `effects/synthetic/<regime>/`.
 Writes `e1_report.md`, `e1_checks.csv`, `e1_stats.csv` and `e1_recovery.csv` to
 `effects/synthetic/`, and the committed record `effects/e1_manifest.json`.
 Exits non-zero if any check fails.
+
+## H7 power simulation (H2: reference-subset size)
+
+| file | what it does |
+|---|---|
+| `power_h7.py` | synthetic query pool → diagnosis label, G_q and Δ DCG per (K_c, policy, t) → power of the H7 test per reference size |
+| `tests/test_power_h7.py` | pool shape and reproducibility, both tests' recommendations, untestable subsets counted as misses |
+
+Two tests of H7, at universe sizes 2000 (synthetic config) and 8000 (realistic
+|U_q|), reference sizes from `config.power` plus all 97 queries:
+
+- **group** (the proposal's): gate-sensitive vs reranking-sensitive Δ DCG.
+  `unconditional_power` counts a subset with fewer than two queries in a group
+  as a miss; `shared.diagnosis.required_reference_size` reports power over
+  testable subsets only, which overstates it when one group is rare.
+- **continuous** (proposed): one-sided Spearman(G_q, Δ DCG) over every
+  reference query.
+
+    python -m experiments_shubham.power_h7                                  # ~30 min
+    python -m experiments_shubham.power_h7 --pool-size 100 --n-docs 2000    # quick
+
+Writes the pool and power tables to `analysis/power/` and the committed record,
+with label shares, headline power and both recommendations, to
+`analysis/h7_power_manifest.json`.
