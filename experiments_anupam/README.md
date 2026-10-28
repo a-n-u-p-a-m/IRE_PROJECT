@@ -23,9 +23,11 @@ outsider-allocation runner and the reproducibility pack.
 
 ## Running it
 
-    make test-all            # 341 tests: shared, Shubham's, mine
+    make test-all            # 355 tests: shared, Shubham's, mine
     make smoke-week1         # the whole chain, no Pyserini, ~5s
-    python -m pytest experiments_anupam     # mine alone, 99 tests
+    make verify-bm25         # BM25 against the published figures
+    make feasibility         # the Week-2 gate
+    python -m pytest experiments_anupam     # mine alone, 106 tests
 
 `smoke_pipeline.py` is the one to run after any change to a shared file. The
 unit suites prove each module correct; the smoke run proves they **compose** —
@@ -82,12 +84,14 @@ number, so the official measures are implemented separately and cross-checked
 against `pytrec_eval`. Recall binarises at grade ≥ 2, which is the TREC DL
 track's own convention and why nDCG and recall disagree about "relevant".
 
-**"Relevant" means gain-carrying, not `relevance > 0`.** `shared/qrels.py`
-(lines 135 and 174) counts any judged document with `relevance > 0`, which
-includes grade 1 — but grade 1 gains 0.0 under the frozen map, so excluding one
-is not a gate failure. `feasibility_report.py` uses the gain map and reports
-the shared definition beside it, because the headline-`K_c` decision is made
-from that count and the looser definition inflates it.
+**"Relevant" means gain-carrying, not `relevance > 0`.** Grade 1 gains 0.0
+under the frozen map, so excluding a grade-1 document is not a gate failure.
+`shared.coverage_report` and `shared.judged_non_survivor_counts` take the gain
+map as a **required** argument for this reason and return `n_gainful` /
+`n_gainful_non_survivors`. They used to count `relevance > 0`, which on this
+collection overstated the gate-failure supply by 4×–9×; see
+`docs/design_log.md` for 2026-10-28 and
+`tests/test_data_layer.py::test_grade_one_is_judged_but_not_a_gate_failure`.
 
 ## The floor policy
 
