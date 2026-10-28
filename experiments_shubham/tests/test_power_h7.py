@@ -77,5 +77,9 @@ def test_untestable_subsets_count_as_misses(small_cfg):
     pool["label"] = RERANK_SENSITIVE
     pool.loc[pool["query"] < 2, "label"] = GATE_SENSITIVE
     table = power_h7.group_power(pool, small_cfg, [6])
-    assert (table["unconditional_power"] <= table["power"].fillna(0.0)).all()
+    # The conditional figure is the optimistic one: it throws the untestable
+    # draws away instead of scoring them as the H7 failures they are.
+    assert (
+        table["unconditional_power"] <= table["power_given_testable"].fillna(1.0)
+    ).all()
     assert (table["unconditional_power"] < 0.2).all()

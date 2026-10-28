@@ -247,12 +247,23 @@ def required_reference_size(
 
     Returns one row per size with the estimated power. Take the smallest size
     reaching `target_power` and make that the subset size in the config.
+
+    An UNTESTABLE draw counts as a miss. A reference subset that happens to put
+    fewer than two queries in a group yields no p-value, and in a real run at
+    that subset size you would simply have no answer - which is a failure to
+    detect, not a sample to discard. `power` is therefore detections divided by
+    `n_simulations`, never by the number of testable draws.
+
+    That distinction is not cosmetic here. When gate-sensitive queries are rare,
+    most draws are untestable and conditioning on the testable ones overstates
+    power several-fold. `power_given_testable` is reported alongside as a
+    diagnostic, but `meets_target` keys off the unconditional figure.
     """
     rng = np.random.default_rng(seed)
     rows = []
     for n in candidate_sizes:
         detections = 0
-        usable = 0
+        testable = 0
         for _ in range(n_simulations):
             labels, deltas = [], []
             for _ in range(n):
@@ -265,17 +276,19 @@ def required_reference_size(
             )
             res = h7_test(frame, n_permutations=400, seed=int(rng.integers(1 << 31)))
             if res.empty or not np.isfinite(res.iloc[0]["p_value"]):
-                continue
-            usable += 1
+                continue                      # untestable: counted as a miss
+            testable += 1
             if res.iloc[0]["p_value"] < alpha:
                 detections += 1
-        power = detections / usable if usable else float("nan")
+        power = detections / n_simulations if n_simulations else float("nan")
         rows.append(
             {
                 "reference_size": int(n),
                 "n_simulations": n_simulations,
-                "n_usable": usable,
+                "n_testable": testable,
+                "testable_fraction": (testable / n_simulations) if n_simulations else float("nan"),
                 "power": power,
+                "power_given_testable": (detections / testable) if testable else float("nan"),
                 "meets_target": bool(np.isfinite(power) and power >= target_power),
             }
         )

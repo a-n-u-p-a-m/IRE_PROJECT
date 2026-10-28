@@ -213,6 +213,23 @@ def _simulator(effect_size: float):
     return simulate
 
 
+def _rare_gate_simulator(effect_size: float, gate_share: float):
+    """
+    Gate-sensitive queries are rare, as the Week-1 simulation found them to be
+    (2-7% across universe sizes and candidate depths). With a small subset,
+    most draws then put fewer than two queries in that group and cannot be
+    tested at all.
+    """
+    def simulate(rng):
+        label = rng.choice(
+            [GATE_SENSITIVE, RERANK_SENSITIVE, MIXED_STABLE],
+            p=[gate_share, 1.0 - gate_share - 0.05, 0.05],
+        )
+        mean = effect_size if label == GATE_SENSITIVE else 0.0
+        return label, float(rng.normal(mean, 1.0))
+    return simulate
+
+
 def test_power_simulation_finds_a_sufficient_size():
     out = required_reference_size(
         _simulator(2.0), candidate_sizes=[10, 30, 60],
@@ -234,3 +251,58 @@ def test_power_simulation_reports_failure_rather_than_guessing():
         n_simulations=30, alpha=0.05, target_power=0.8, seed=6,
     )
     assert smallest_sufficient_size(out) is None
+
+
+def test_untestable_draws_count_as_misses():
+    """
+    The denominator is n_simulations, not the number of testable draws.
+
+    A subset that puts fewer than two queries in a group yields no p-value, and
+    in a real run at that size you would have no answer - a failure to detect,
+    not a sample to throw away. When gate-sensitive queries are rare most draws
+    are untestable, and conditioning on the testable ones overstates power
+    several-fold. This is the exact trap the H7 Week-1 simulation hit.
+    """
+    out = required_reference_size(
+        _rare_gate_simulator(5.0, gate_share=0.04), candidate_sizes=[10],
+        n_simulations=60, alpha=0.05, target_power=0.8, seed=11,
+    )
+    row = out.iloc[0]
+    assert row["n_testable"] < row["n_simulations"], (
+        "the fixture no longer produces untestable draws, so this test proves "
+        "nothing; lower gate_share or the reference size"
+    )
+    assert row["power"] == pytest.approx(
+        row["power_given_testable"] * row["n_testable"] / row["n_simulations"]
+    )
+    assert row["power"] < row["power_given_testable"], (
+        "conditioning on testable draws must inflate the figure, which is why "
+        "meets_target keys off the unconditional one"
+    )
+    assert row["testable_fraction"] == pytest.approx(
+        row["n_testable"] / row["n_simulations"]
+    )
+
+
+def test_meets_target_uses_the_unconditional_power():
+    out = required_reference_size(
+        _rare_gate_simulator(5.0, gate_share=0.04), candidate_sizes=[10],
+        n_simulations=60, alpha=0.05, target_power=0.8, seed=11,
+    )
+    row = out.iloc[0]
+    assert bool(row["meets_target"]) == bool(row["power"] >= 0.8)
+    assert smallest_sufficient_size(out) is None
+
+
+def test_n_usable_is_gone_so_stale_corrections_break_loudly():
+    """
+    `experiments_shubham/power_h7.py` rescaled `power * n_usable /
+    n_simulations` to work around the old conditional denominator. With the
+    denominator fixed, that rescaling would wrongly shrink the figure a second
+    time. Dropping the column makes the stale line raise a KeyError instead of
+    silently returning a smaller number.
+    """
+    out = required_reference_size(
+        _simulator(2.0), candidate_sizes=[10], n_simulations=10, seed=1,
+    )
+    assert "n_usable" not in out.columns

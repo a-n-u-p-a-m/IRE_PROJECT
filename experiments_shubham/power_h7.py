@@ -17,9 +17,12 @@ synthetic data before any GPU budget is committed (config `power`).
      group       the proposal's test: Delta DCG of gate-sensitive vs
                  reranking-sensitive queries (shared.diagnosis.h7_test). A
                  subset with fewer than two queries in a group cannot be
-                 tested, which is a failed H7, so `unconditional_power`
-                 counts it as a miss; shared's `power` conditions on testable
-                 subsets only and overstates what a real subset would give.
+                 tested, which is a failed H7, so it counts as a miss.
+                 `shared.diagnosis` counts it that way itself: its `power` is
+                 over every simulation drawn, and `power_given_testable`
+                 conditions on the testable ones and overstates what a real
+                 subset would give. `unconditional_power` here is the former,
+                 kept as a name the continuous test can share.
      continuous  the same hypothesis on every reference query: one-sided
                  Spearman correlation between G_q and Delta DCG. Proposed to
                  the team, not frozen.
@@ -138,8 +141,11 @@ def group_power(pool: pd.DataFrame, cfg: FrozenConfig, sizes: list[int]) -> pd.D
             simulate, sizes, n_simulations=pw["n_simulations"],
             alpha=pw["alpha"], target_power=pw["target_power"], seed=cfg.seed,
         )
-        table["unconditional_power"] = (
-            table["power"].fillna(0.0) * table["n_usable"] / table["n_simulations"])
+        # `shared.diagnosis` now divides detections by every simulation drawn,
+        # so its `power` is already the unconditional quantity and the local
+        # rescaling that used to live here would double-correct. The conditional
+        # figure, if ever wanted, is `power_given_testable`.
+        table["unconditional_power"] = table["power"]
         gate = deltas[labels == GATE_SENSITIVE]
         rer = deltas[labels == RERANK_SENSITIVE]
         out.append(table.assign(
