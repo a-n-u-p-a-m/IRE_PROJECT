@@ -1,5 +1,7 @@
 # Core. Everything in shared/ runs on these alone: the counterfactual engine,
-# the synthetic arm, the metrics and all 207 tests. No GPU, no Java, no index.
+# the synthetic arm, the metrics and all 210 tests. No GPU, no Java, no index.
+# experiments_anupam/ needs nothing beyond these either, except for the real
+# BM25 run: its 59 tests fabricate runs rather than requiring an index.
 numpy>=1.26,<3
 pandas>=2.1
 pyarrow>=14.0

@@ -72,4 +72,51 @@ Decide the *rule* now, the value arrives later:
 
 ---
 
+## 2026-10-27 — Week-1 code, and a shared-module correction
+
+**Anupam's Week-1 modules landed:** `data_prep.py`, `retrievers.py`,
+`run_stage1.py`, `build_universe.py`, `smoke_pipeline.py`, with 59 tests. The
+one Week-1 row still open is the BM25 run itself, which needs Pyserini, a JDK
+and the prebuilt index.
+
+**`shared/diagnosis.py`: the power denominator was conditional.**
+`required_reference_size` divided detections by the number of *testable* draws.
+A reference subset with fewer than two queries in a group cannot be tested at
+all — which is an H7 failure, not a draw to be discarded — so the old `power`
+answered "given that the subset was testable" and overstated what a real subset
+would deliver. It now divides by every simulation drawn, and the conditional
+figure is available separately as `power_given_testable`.
+
+`n_usable` was **removed** rather than kept, deliberately. Shubham was already
+correcting for this downstream (`power_h7.py` multiplied by
+`n_usable / n_simulations`), and the two corrections together would have
+cancelled the fix silently. Removing the column made his line raise `KeyError`
+instead, which is how it got found and deleted in the same change. His recorded
+H7 numbers are unchanged: his old expression came to
+`detections / n_simulations`, which is exactly what `power` now is.
+
+**Consequence for H7.** The honest figure is lower than the one reported
+before, and with gate-sensitive queries at 2–7% of the synthetic pool the group
+test may not reach target power at any feasible reference size. That is a
+finding to state in advance, not a problem to tune away: if no size reaches it,
+H7 is declared descriptive rather than confirmatory. The continuous
+(Spearman) variant is the fallback and is not yet frozen.
+
+**Containment is a tautology inside one build.** `config.py` already refuses
+any Stage-1 system that is not also a universe source, so inside a single
+`build_universe` call every candidate set is a subset of a union built from
+that same run. The check is kept as defence against that config rule being
+loosened, and a test now asserts the subset relation so the day it stops
+holding is noticed. The check's real use is Week 2 and after: a frozen universe
+against a **regenerated** run, where it does fire.
+
+**The `|U_q| > max(K_c)` guard needs two layers.** The config catches a
+retrieval depth `M` below the largest `K_c` at load time. It cannot catch
+`universe.max_size` capping `|U_q|` below `max(K_c)`, because that depends on
+the union's actual size — so that one is caught in `build_universe` after the
+union is built. Both produce the same failure (world C equals world A and
+`E_gate` is identically zero) and both now have a test.
+
+---
+
 <!-- next entry below -->
