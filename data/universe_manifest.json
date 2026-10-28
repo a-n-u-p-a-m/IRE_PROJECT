@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-10-28T13:35:37+0000",
+  "timestamp": "2026-10-28T16:11:41+0000",
   "config_fingerprint": "46d0807d8ed3",
   "owner": "anupam",
-  "git_commit": "594e855618813ac4cb5d2a901b57fa2e05ee7ef7",
+  "git_commit": "839e1f0cde7a070bbe4c16c4f64bbdf312a505a3",
   "python": "3.12.3",
   "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
   "numpy": "2.5.4",
@@ -32,5 +32,5 @@
   "coverage_median": 0.01652892561983471,
   "coverage_min": 0.002609393817743878,
   "n_judged_median": 149,
-  "n_relevant_median": 53
+  "n_gainful_median": 21
 }
