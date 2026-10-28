@@ -26,7 +26,7 @@ map lives in the frozen config and is passed in, never hard-coded here.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Container, Mapping, Sequence
 from typing import Literal
 
 GainMap = Mapping[int, float]
@@ -165,6 +165,38 @@ def check_aggregation(
     """
     per_doc = ranking_utilities(ranking, relevances, k, gain_map, "dcg")
     return abs(sum(per_doc.values()) - dcg_at_k(ranking, relevances, k, gain_map)) < tol
+
+
+def condense(ranking: Sequence[str], judged: Container[str]) -> list[str]:
+    """
+    The ranking with unjudged documents removed, order preserved.
+
+    READ THIS BEFORE USING IT. `qrels.py` states the project's primary rule:
+    unjudged documents still occupy ranks as competitors, because the policy
+    being simulated really would have ranked them. Condensing deliberately
+    breaks that rule, so it is NOT the default and nothing here calls it.
+
+    It exists because the primary rule, defensible in the abstract, collides
+    with the measured judgment density of this collection. U_q is 1.65% judged
+    while C_q is 6-29% judged depending on K_c, so the no-gate world sorts
+    ~9,000 documents of which almost none are judged. Nearly every judged
+    survivor is then displaced out of the top k in world C, driving
+    U_d(pi_no1) to 0 and E_gate towards DCG(pi_act) - the gate would appear to
+    account for all retrieved utility, as an artefact of where NIST placed
+    judgments in 2019 rather than as a finding.
+
+    The condensed ranking is the standard remedy for incomplete judgments
+    (Sakai, "Alternatives to Bpref", SIGIR 2007): a judged document's rank then
+    counts only judged documents above it, so a difference in judgment density
+    between two document sets no longer distorts a comparison between them.
+
+    Intended use is the SECONDARY analysis - compute every effect both ways and
+    report whether the conclusion survives - not a replacement for the primary
+    estimand. Which mode is headline is a team decision with a config
+    fingerprint attached, and the cheapest moment to make it is before the
+    Stage-2 cache is filled.
+    """
+    return [d for d in ranking if d in judged]
 
 
 def ranks_of(ranking: Sequence[str]) -> dict[str, int]:

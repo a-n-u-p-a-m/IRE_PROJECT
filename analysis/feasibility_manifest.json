@@ -1,0 +1,110 @@
+{
+  "timestamp": "2026-10-28T15:03:13+0000",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "anupam",
+  "git_commit": "594e855618813ac4cb5d2a901b57fa2e05ee7ef7",
+  "python": "3.12.3",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "numpy": "2.5.4",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "by_k_c": {
+    "100": {
+      "median_candidate_jaccard": 0.1628,
+      "by_system": {
+        "bm25": {
+          "median_density_cq": 0.51,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 28.58,
+          "median_judged_retained": 0.322,
+          "median_gainful_non_survivors": 6.0,
+          "queries_with_no_gainful_non_survivor": 17,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        },
+        "dpr": {
+          "median_density_cq": 0.48,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 26.9,
+          "median_judged_retained": 0.3127,
+          "median_gainful_non_survivors": 6.0,
+          "queries_with_no_gainful_non_survivor": 23,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        }
+      },
+      "usable_for_headline_gate": true
+    },
+    "500": {
+      "median_candidate_jaccard": 0.1364,
+      "by_system": {
+        "bm25": {
+          "median_density_cq": 0.178,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 10.86,
+          "median_judged_retained": 0.6154,
+          "median_gainful_non_survivors": 3.0,
+          "queries_with_no_gainful_non_survivor": 33,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        },
+        "dpr": {
+          "median_density_cq": 0.158,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 9.31,
+          "median_judged_retained": 0.5337,
+          "median_gainful_non_survivors": 3.0,
+          "queries_with_no_gainful_non_survivor": 35,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        }
+      },
+      "usable_for_headline_gate": true
+    },
+    "1000": {
+      "median_candidate_jaccard": 0.1148,
+      "by_system": {
+        "bm25": {
+          "median_density_cq": 0.108,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 6.44,
+          "median_judged_retained": 0.7246,
+          "median_gainful_non_survivors": 2.0,
+          "queries_with_no_gainful_non_survivor": 36,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        },
+        "dpr": {
+          "median_density_cq": 0.094,
+          "median_density_uq": 0.01653,
+          "median_density_ratio": 5.74,
+          "median_judged_retained": 0.6485,
+          "median_gainful_non_survivors": 1.0,
+          "queries_with_no_gainful_non_survivor": 39,
+          "n_queries": 97,
+          "usable_for_headline_gate": true
+        }
+      },
+      "usable_for_headline_gate": true
+    }
+  },
+  "headline_k_c": 100,
+  "headline_k_c_rule": "among depths clearing the non-degeneracy floor (median gain-carrying non-survivors >= 1.0 for every Stage-1 system), the depth with the greatest supply; ties to the deeper depth. Supply is measurable before any effect is computed.",
+  "n_queries": 97,
+  "universe_size_median": 9097,
+  "total_universe_pairs": 872455,
+  "findings": {
+    "judgment_placement": {
+      "where": [
+        "K_c=100, bm25 (28.6x)",
+        "K_c=100, dpr (26.9x)",
+        "K_c=500, bm25 (10.9x)",
+        "K_c=500, dpr (9.3x)",
+        "K_c=1000, bm25 (6.4x)",
+        "K_c=1000, dpr (5.7x)"
+      ],
+      "explain": "C_q is far more densely judged than U_q. World C promotes from the sparse pool while world A ranks within the dense one, and unjudged documents earn zero gain, so E_gate is biased upwards by where the judgments are. Note this is a consequence of a DELIBERATE rule (qrels.py: unjudged documents occupy ranks as competitors), not a bug - but at this density the rule drives E_gate towards DCG(pi_act). Decide before Stage-2 scoring: keep the rule and report the judged fraction of world C's top-k beside every result, or add a condensed-list secondary analysis (utility.condense) and show the conclusion survives both."
+    }
+  }
+}

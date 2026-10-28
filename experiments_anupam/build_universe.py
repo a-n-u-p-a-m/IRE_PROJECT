@@ -151,7 +151,7 @@ def run(
 
     qp = Path(qrels_path) if qrels_path else None
     if qp and qp.exists():
-        cov = coverage_report(universe, load(qp, "qrels"))
+        cov = coverage_report(universe, load(qp, "qrels"), cfg.gain_map)
         cov.to_parquet(out.with_name("universe_coverage.parquet"), index=False)
         logger.info(
             "judgment coverage: median %.4f, min %.4f, median judged %d/query",
@@ -162,7 +162,7 @@ def run(
             coverage_median=float(cov["coverage"].median()),
             coverage_min=float(cov["coverage"].min()),
             n_judged_median=int(cov["n_judged"].median()),
-            n_relevant_median=int(cov["n_relevant"].median()),
+            n_gainful_median=int(cov["n_gainful"].median()),
         )
 
     write_manifest(out.with_name("universe_manifest.json"),

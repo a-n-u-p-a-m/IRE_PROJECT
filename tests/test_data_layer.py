@@ -51,6 +51,12 @@ from shared.universe import (
     write_reference_subset,
 )
 
+# The frozen map for TREC Deep Learning passage ranking: grade 1 is "Related"
+# and earns nothing. Spelled out here rather than read from the committed
+# config so that editing the config cannot silently rewrite what these tests
+# assert about grade 1.
+TREC_DL_GAINS = {0: 0.0, 1: 0.0, 2: 3.0, 3: 7.0}
+
 
 def _run(system, docs_by_query, checkpoint="v1"):
     rows = []
@@ -257,16 +263,66 @@ def test_coverage_and_non_survivor_counts(two_runs, tmp_path):
     p.write_text("q1 0 a 3\nq1 0 e 2\nq1 0 f 0\n", encoding="utf-8")
     attached = attach_judgments(uni, read_trec_qrels(p))
 
-    cov = coverage_report(uni, attached).set_index("query_id")
+    cov = coverage_report(uni, attached, TREC_DL_GAINS).set_index("query_id")
     assert cov.loc["q1", "n_judged"] == 3
-    assert cov.loc["q1", "n_relevant"] == 2
+    assert cov.loc["q1", "n_gainful"] == 2
 
     counts = judged_non_survivor_counts(
-        attached, {"q1": {"a", "b"}}, "bm25", 2
+        attached, {"q1": {"a", "b"}}, "bm25", 2, TREC_DL_GAINS
     ).set_index("query_id")
-    assert counts.loc["q1", "n_judged_non_survivors"] == 2     # e and f
-    assert counts.loc["q1", "n_relevant_non_survivors"] == 1   # e only
+    assert counts.loc["q1", "n_judged_non_survivors"] == 2    # e and f
+    assert counts.loc["q1", "n_gainful_non_survivors"] == 1   # e only
     assert len(judged_subset(attached)) == 3
+
+
+def test_grade_one_is_judged_but_not_a_gate_failure(two_runs, tmp_path):
+    """
+    The TREC-DL trap, and the reason both functions take a gain map.
+
+    Grade 1 is "Related": on topic, does not answer the query. The frozen map
+    scores it 0.0, so a grade-1 document contributes nothing wherever it is
+    ranked and excluding one costs no utility - it is judged, but it is not a
+    gate failure. Counting `relevance > 0` instead overstated the gate-failure
+    supply by 4x to 9x on the real collection, and the headline K_c was about
+    to be chosen from that number.
+    """
+    uni = build_universe(two_runs, depth_m=4)
+    p = tmp_path / "qrels.txt"
+    p.write_text("q1 0 a 3\nq1 0 e 1\nq1 0 f 1\n", encoding="utf-8")
+    attached = attach_judgments(uni, read_trec_qrels(p))
+
+    cov = coverage_report(uni, attached, TREC_DL_GAINS).set_index("query_id")
+    assert cov.loc["q1", "n_judged"] == 3, "all three were judged"
+    assert cov.loc["q1", "n_gainful"] == 1, "only grade 3 carries gain"
+
+    counts = judged_non_survivor_counts(
+        attached, {"q1": {"a", "b"}}, "bm25", 2, TREC_DL_GAINS
+    ).set_index("query_id")
+    assert counts.loc["q1", "n_judged_non_survivors"] == 2
+    assert counts.loc["q1", "n_gainful_non_survivors"] == 0, (
+        "excluding two grade-1 documents is not a gate failure"
+    )
+
+    # A collection whose grade 1 really does mean relevant gets the other answer
+    from shared.utility import EXPONENTIAL_GAIN
+    counts2 = judged_non_survivor_counts(
+        attached, {"q1": {"a", "b"}}, "bm25", 2, EXPONENTIAL_GAIN
+    ).set_index("query_id")
+    assert counts2.loc["q1", "n_gainful_non_survivors"] == 2
+
+
+def test_an_unmapped_grade_raises_rather_than_scoring_zero(two_runs, tmp_path):
+    """
+    A grade absent from the map must not fall through to "not relevant": that
+    would silently shrink the gate-failure supply for a whole collection.
+    """
+    uni = build_universe(two_runs, depth_m=4)
+    p = tmp_path / "qrels.txt"
+    p.write_text("q1 0 a 4\n", encoding="utf-8")
+    attached = attach_judgments(uni, read_trec_qrels(p))
+
+    with pytest.raises(KeyError, match="not in the frozen gain map"):
+        coverage_report(uni, attached, TREC_DL_GAINS)
 
 
 # ── cache ─────────────────────────────────────────────────────────────

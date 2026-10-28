@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-10-28T12:05:59+0000",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "anupam",
+  "git_commit": "594e855618813ac4cb5d2a901b57fa2e05ee7ef7",
+  "python": "3.12.3",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "numpy": "2.5.4",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "artifact": [
+    "data/qrels.parquet",
+    "data/query_split.json"
+  ],
+  "queries_file": "data/queries.tsv",
+  "qrels_source": "data/qrels.txt",
+  "n_queries": 97,
+  "split_sizes": {
+    "train": 49,
+    "val": 19,
+    "test": 29
+  },
+  "split_fractions": {
+    "train": 0.5,
+    "val": 0.2,
+    "test": 0.3
+  },
+  "split_seed": 42,
+  "split_rule": "sorted query ids, seeded permutation, largest-remainder sizes",
+  "gain_map": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 3.0,
+    "3": 7.0
+  }
+}

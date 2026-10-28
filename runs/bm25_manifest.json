@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-10-28T12:18:53+0000",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "anupam",
+  "git_commit": "594e855618813ac4cb5d2a901b57fa2e05ee7ef7",
+  "python": "3.12.3",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "numpy": "2.5.4",
+  "torch": "2.14.1+cu130",
+  "cuda": "13.0",
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "artifact": "runs/bm25.parquet",
+  "system": "bm25",
+  "checkpoint": "pyserini:msmarco-v1-passage|bm25-k1=0.9-b=0.4",
+  "n_queries": 97,
+  "n_rows": 485000,
+  "depth": 5000,
+  "depth_min": 5000,
+  "depth_median": 5000,
+  "queries_file": "data/queries.tsv",
+  "from_run": null,
+  "seconds": 16.8
+}

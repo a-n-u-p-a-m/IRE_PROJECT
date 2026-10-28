@@ -20,11 +20,13 @@ default slip in.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 
 from .schema import empty, validate_qrels
+from .utility import gain
 
 logger = logging.getLogger(__name__)
 
@@ -118,13 +120,23 @@ def judged_flags(qrels: pd.DataFrame) -> dict[tuple[str, str], bool]:
     }
 
 
-def coverage_report(universe: pd.DataFrame, qrels: pd.DataFrame) -> pd.DataFrame:
+def coverage_report(
+    universe: pd.DataFrame, qrels: pd.DataFrame, gain_map: Mapping[int, float]
+) -> pd.DataFrame:
     """
     Per-query judgment coverage of the universe.
 
-    Returns (query_id, universe_size, n_judged, n_relevant, coverage). Coverage
+    Returns (query_id, universe_size, n_judged, n_gainful, coverage). Coverage
     is reported, never assumed: strong gate-failure claims are not available
     when outsider judgments are thin.
+
+    `n_gainful` counts documents whose grade carries gain under the frozen map,
+    NOT documents with relevance > 0. On TREC-DL those differ by a factor of
+    four to nine, because grade 1 ("Related") maps to 0.0: a grade-1 document
+    is judged, is not relevant for this project's utility, and contributes
+    nothing wherever it is ranked. The gain map is a required argument rather
+    than a default so the definition always travels with the configuration that
+    set it.
     """
     uni = universe[["query_id", "doc_id"]].astype(str)
     qr = qrels[["query_id", "doc_id", "relevance", "judged"]].copy()
@@ -132,14 +144,16 @@ def coverage_report(universe: pd.DataFrame, qrels: pd.DataFrame) -> pd.DataFrame
 
     merged = uni.merge(qr, on=["query_id", "doc_id"], how="left")
     merged["judged"] = merged["judged"].fillna(False).astype(bool)
-    merged["is_rel"] = merged["judged"] & (merged["relevance"].fillna(0) > 0)
+    merged["is_gainful"] = merged["judged"] & merged["relevance"].map(
+        lambda r: pd.notna(r) and gain(int(r), gain_map) > 0.0
+    ).fillna(False)
 
     out = (
         merged.groupby("query_id", observed=True)
         .agg(
             universe_size=("doc_id", "size"),
             n_judged=("judged", "sum"),
-            n_relevant=("is_rel", "sum"),
+            n_gainful=("is_gainful", "sum"),
         )
         .reset_index()
     )
@@ -152,6 +166,7 @@ def judged_non_survivor_counts(
     candidates: dict[str, set[str]],
     system: str,
     k_c: int,
+    gain_map: Mapping[int, float],
 ) -> pd.DataFrame:
     """
     |J_q \\ C_q| per query: the judged documents the gate excluded.
@@ -160,6 +175,14 @@ def judged_non_survivor_counts(
     pools are built from participating systems' top-k. If this is thin at a
     given depth, the headline gate analysis belongs at a shallower one - and
     that decision rule must be frozen before magnitudes are inspected.
+
+    `n_gainful_non_survivors` is the count that matters, and it is NOT the
+    count of excluded documents with relevance > 0. Excluding a grade-1
+    document costs nothing under a gain map that scores it 0.0, so it is not a
+    gate failure. Measured on TREC-DL 2019+2020 the two differ by 4x to 9x -
+    at K_c=1000 the DPR candidate set has a median of 9 excluded documents with
+    relevance > 0 and exactly 1 that carries gain - so a headline K_c chosen
+    on the looser count would be chosen on a number nine times too large.
     """
     j = judged_subset(qrels)[["query_id", "doc_id", "relevance"]].astype(
         {"query_id": "string", "doc_id": "string"}
@@ -171,7 +194,11 @@ def judged_non_survivor_counts(
         docs = set(grp["doc_id"].astype(str))
         outside = docs - cq
         rel_by_doc = dict(zip(grp["doc_id"].astype(str), grp["relevance"]))
-        rel_outside = {d for d in outside if int(rel_by_doc.get(d) or 0) > 0}
+        gainful_outside = {
+            d for d in outside
+            if pd.notna(rel_by_doc.get(d))
+            and gain(int(rel_by_doc[d]), gain_map) > 0.0
+        }
         recs.append(
             {
                 "query_id": str(qid),
@@ -179,7 +206,7 @@ def judged_non_survivor_counts(
                 "k_c": k_c,
                 "n_judged": len(docs),
                 "n_judged_non_survivors": len(outside),
-                "n_relevant_non_survivors": len(rel_outside),
+                "n_gainful_non_survivors": len(gainful_outside),
             }
         )
     return pd.DataFrame(recs)

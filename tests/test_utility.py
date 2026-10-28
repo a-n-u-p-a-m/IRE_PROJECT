@@ -18,6 +18,7 @@ import pytest
 from shared.utility import (
     EXPONENTIAL_GAIN,
     check_aggregation,
+    condense,
     dcg_at_k,
     document_utility,
     gain,
@@ -139,3 +140,55 @@ def test_rank_helpers():
     assert rank_of(["x", "y", "z"], "x") == 1
     assert rank_of(["x", "y"], "q") is None
     assert ranks_of(["x", "y", "z"]) == {"x": 1, "y": 2, "z": 3}
+
+
+# ── condensed rankings ────────────────────────────────────────────────
+
+def test_condense_removes_unjudged_and_keeps_order():
+    assert condense(["a", "x", "b", "y", "c"], {"a", "b", "c"}) == ["a", "b", "c"]
+
+
+def test_condense_is_the_identity_when_everything_is_judged():
+    assert condense(["a", "b"], {"a", "b", "z"}) == ["a", "b"]
+
+
+def test_condense_can_empty_a_ranking():
+    assert condense(["x", "y"], {"a"}) == []
+
+
+def test_condensing_makes_a_judged_rank_immune_to_unjudged_competitors():
+    """
+    The whole point, and the invariant any application of this must preserve.
+
+    The same judged documents in the same order, with differing numbers of
+    unjudged documents interleaved, must give identical ranks once condensed.
+    Uncondensed they do not, which is the mechanism by which a difference in
+    judgment density between C_q and U_q biases E_gate: unjudged competitors
+    displace judged documents out of the top k in whichever world ranks over
+    the sparser pool.
+    """
+    judged = {"a", "b"}
+    sparse = ["x", "a", "y", "z", "b"]            # as world C sees them
+    dense = ["a", "b"]                            # as world A sees them
+
+    assert ranks_of(sparse)["b"] == 5
+    assert ranks_of(dense)["b"] == 2
+    assert ranks_of(condense(sparse, judged)) == ranks_of(condense(dense, judged))
+
+
+def test_condensing_changes_utility_only_through_rank():
+    """
+    Condensing must not invent gain. A document's utility after condensing is
+    exactly what the gain map says at its new rank - no more, no less.
+    """
+    judged = {"a"}
+    ranking = ["x", "y", "z", "a"]
+    gains = {"a": 3}
+
+    before = document_utility(rank_of(ranking, "a"), 3, 10, TREC_DL)
+    after = document_utility(
+        rank_of(condense(ranking, judged), "a"), 3, 10, TREC_DL
+    )
+    assert after > before, "removing competitors above it can only promote it"
+    assert after == TREC_DL[3] / math.log2(2.0)
+    assert gains["a"] == 3
