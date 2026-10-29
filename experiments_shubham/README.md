@@ -89,3 +89,16 @@ from `config.power` plus all 97 queries, recommended at the headline K_c from
 Writes the pool and power tables to `analysis/power/` and the committed record,
 with label shares, headline power and both recommendations, to
 `analysis/h7_power_manifest.json`.
+
+## Effect analysis and H7 (Week 2)
+
+| file | what it does |
+|---|---|
+| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, and H7 (group and continuous tests) per policy and t |
+| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; end-to-end run on a small grid |
+
+It reads only what `engine.run_grid` writes, so it runs unchanged on the real
+effect tables in Week 3. K_c defaults to the feasibility report's headline.
+
+    python -m experiments_shubham.engine --regime weak_retriever
+    python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever --system synthetic
