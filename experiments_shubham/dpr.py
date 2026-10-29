@@ -37,7 +37,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
-import torch
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,12 @@ DEFAULT_SHARD_SIZE = 100_000
 TIE_MARGIN = 64                   # extra candidates fetched to resolve boundary ties
 
 
+# torch is imported inside the functions that use it, so the module (and the
+# run_dpr manifest code) imports on machines without torch.
+
 def _default_device() -> str:
+    import torch
+
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
@@ -65,6 +69,7 @@ class CosDPREncoder:
 
     def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None,
                  fp16: bool = False) -> None:
+        import torch
         from transformers import BertConfig, BertModel, BertTokenizerFast
 
         self.model_name = model_name
@@ -96,13 +101,14 @@ class CosDPREncoder:
         from huggingface_hub import hf_hub_download
         return hf_hub_download(model_name, filename)
 
-    @torch.no_grad()
     def encode(self, texts: list[str], max_length: int | None = None) -> np.ndarray:
         """float32 (n, 768). max_length=None means BERT's 512, as Pyserini does for queries."""
+        import torch
+
         inputs = self.tokenizer(list(texts), max_length=max_length, padding="longest",
                                 truncation=True, return_token_type_ids=False,
                                 return_tensors="pt").to(self.device)
-        with torch.autocast("cuda", dtype=torch.float16, enabled=self.fp16):
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.float16, enabled=self.fp16):
             cls = self.bert(input_ids=inputs["input_ids"],
                             attention_mask=inputs["attention_mask"]).last_hidden_state[:, 0, :]
             emb = self.linear(cls)
@@ -205,6 +211,8 @@ def exact_search(query_emb: np.ndarray, shards, k: int, margin: int = TIE_MARGIN
     Over-fetches k + margin candidates so documents tied with the k-th score
     are all seen; raises if the margin was not enough to prove that.
     """
+    import torch
+
     q = torch.from_numpy(np.asarray(query_emb, dtype=np.float32)).to(device)
     nq, fetch = q.shape[0], k + margin
     best_scores = torch.full((nq, 0), float("-inf"), device=device)
