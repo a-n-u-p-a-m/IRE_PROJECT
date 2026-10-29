@@ -59,3 +59,9 @@ venv/
 .idea/
 .DS_Store
 data/.trec_cache/
+
+# LaTeX build artefacts
+*.aux
+*.log
+*.out
+*.toc

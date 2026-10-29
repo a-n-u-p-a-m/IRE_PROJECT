@@ -1,0 +1,552 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{booktabs,longtable,amsmath,amssymb,xcolor,microtype}
+\usepackage[hidelinks]{hyperref}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+
+\newcommand{\Uq}{U_q}
+\newcommand{\Cq}{C_q}
+\newcommand{\Dq}{D_q}
+\newcommand{\Kc}{K_c}
+\newcommand{\fp}[1]{\texttt{#1}}
+
+\title{\textbf{Counterfactual Attribution in Cascaded Retrieval}\\[2pt]
+\large Progress Report --- Weeks 1--2}
+\author{Anupam Dwivedi \and Shubham Paliwal \and Chaitanya K}
+\date{CS4.406 Information Retrieval \& Extraction, IIIT Hyderabad\\
+29 October 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Summary}
+
+The project asks which stage of a two-stage retrieval cascade is responsible
+for the quality of its output, and answers it by constructing explicit
+counterfactual worlds over a frozen document universe. Weeks~1 and~2 are
+complete. All infrastructure, all data artefacts and all pre-registered
+decisions are in place; no real Stage-2 scores have been computed yet, which is
+Week~3.
+
+Concretely: the evaluation universe is frozen at configuration fingerprint
+\fp{46d0807d8ed3} with $872{,}455$ query--document pairs; the BM25 Stage-1 run
+reproduces published effectiveness exactly; the entire Stage-2 bill is one
+measured 27-minute GPU job; $415$ tests pass; and every methodological decision
+that could bias a result is recorded in the design log with its reasoning,
+before the result exists.
+
+Five defects were found and fixed in shared code during this period, four of
+them in checks that were silently vacuous --- they passed while being unable to
+detect the failure they existed to catch. Those are described in
+Section~\ref{sec:corrections}, because they were the most valuable output of
+the fortnight.
+
+\section{The problem and the design}
+
+A cascade retrieves candidates $\Cq = \mathrm{Top}_{\Kc}(\Uq, s_1)$ with a
+cheap Stage-1 scorer and reorders them with an expensive Stage-2 reranker
+$s_2$. Asking ``which stage did the work'' is not a question about score
+correlations; it is a question about what would have happened otherwise.
+
+\subsection{The degeneracy result, and why it motivates the design}
+
+For a \emph{pointwise} Stage-2 scorer, once $\Cq$ is fixed the final ranking is
+invariant to $s_1$. Stage~1's only causal channel into the output is
+\emph{membership} in $\Cq$ --- not the scores it assigned. This is why
+score-level attribution cannot work here, and it is the result the whole
+experimental design is built around.
+
+The complement matters as much: \emph{under a budget constraint}, Stage-1 rank
+decides which candidates survive the cut, so it becomes causally active again.
+That is what the budget worlds measure.
+
+\subsection{Four worlds over a frozen universe}
+
+$\Uq$ is the union of both Stage-1 systems' top-$M$ retrievals, frozen once.
+Every claim is relative to it, so regenerating it would invalidate every
+previously computed effect; this is enforced mechanically by a fingerprint
+sidecar rather than by convention.
+
+\begin{center}
+\begin{tabular}{@{}llp{7.4cm}@{}}
+\toprule
+World & Ranking & Question it answers \\
+\midrule
+A (actual) & $\mathrm{Sort}(\Cq, s_2)$ & what the cascade really did \\
+B (no rerank) & $\Cq$ in Stage-1 order & what the gate alone achieves \\
+C (no gate) & $\mathrm{Sort}(\Uq, s_2)$ & what the reranker would do unrestricted \\
+D (budget) & $\mathrm{Sort}(\text{retained} \cup \text{promoted}, s_2)$ & what a realistic budget buys \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Three estimands, which do not add up}
+
+\begin{align*}
+E_{\text{rerank}} &= U_d(\pi_{\text{act}}) - U_d(\pi_{\text{no2}}) \\
+E_{\text{gate}}   &= U_d(\pi_{\text{act}}) - U_d(\pi_{\text{no1}}) \\
+\Delta_t          &= U_d(\pi_t) - U_d(\pi_{t=1})
+\end{align*}
+
+They are deliberately non-additive. $U_d$ is the per-document contribution to
+DCG@$k$ under an explicit gain map.
+
+\subsection{Conditional invariants: the central design point}
+
+The effects obey sign rules that hold only \emph{conditionally on membership}:
+$e_{\text{rerank}}$ is exactly zero off $\Cq$; $e_{\text{gate}}$ is
+$\geq 0$ for survivors and $\leq 0$ for non-survivors; and $\Delta_t$ has four
+membership strata with three of the four signs fixed (removed $\leq 0$,
+selected outsider $\geq 0$, unselected outsider $= 0$, retained either sign).
+
+A single unconditional validator would therefore reject correct $\Delta_t$ rows
+while passing incorrect $E_{\text{gate}}$ rows. Validation is stratified
+throughout, and \texttt{metrics.evaluate\_within\_strata} deliberately returns
+no pooled row: because $\mathrm{sign}(E_{\text{gate}})$ is fixed by survivorship
+and three of four $\Delta_t$ signs by allocation membership, a pooled statistic
+would reward a model for detecting the partition rather than the effect.
+
+\subsection{The gain map}
+
+TREC-DL grade~1 means ``Related'' --- on topic, does not answer the query. The
+frozen map is $\{0{:}0,\ 1{:}0,\ 2{:}3,\ 3{:}7\}$. Because every estimand is a
+\emph{difference} of utilities, scoring grade~1 as relevant would not cancel;
+it would inflate every effect in which a merely related passage moves. Unmapped
+grades raise rather than defaulting to zero.
+
+\section{What was built}
+
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Component & Owner & Tests \\
+\midrule
+\texttt{shared/} --- engine, worlds, effects, strata, metrics, schema & all (reviewed) & 224 \\
+\texttt{experiments\_anupam/} --- data, retrieval, universe, allocations & Anupam & 145 \\
+\texttt{experiments\_shubham/} --- DPR, world runner, power, analysis & Shubham & 46 \\
+\texttt{experiments\_chaitanya/} --- reranker, cache, features, predictors & Chaitanya & 25 (in PR) \\
+\midrule
+\textbf{Total on \texttt{main}} & & \textbf{415} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Roughly $4{,}600$ lines in \texttt{shared/} with $2{,}600$ lines of tests
+against it, plus $2{,}800$ and $2{,}100$ lines in the Anupam and Shubham
+workstreams. Members never import each other's modules; all exchange happens
+through validated file schemas in \texttt{shared/schema.py}.
+
+\section{Results}
+
+\subsection{Data and Stage-1 runs}
+
+TREC-DL 2019 and 2020 passage ranking: $43 + 54 = 97$ judged queries over MS
+MARCO, $20{,}646$ judgments. Split by query $49/19/29$ at seed~42, committed as
+a file so ``should be identical'' becomes ``is identical''.
+
+BM25 ($k_1{=}0.9$, $b{=}0.4$, Pyserini prebuilt index) reproduces the published
+figures \emph{exactly}:
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{nDCG@10} & \multicolumn{2}{c}{Recall@1000} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+& ours & published & ours & published \\
+\midrule
+DL19 & 0.5058 & 0.5058 & 0.7501 & 0.7501 \\
+DL20 & 0.4796 & 0.4796 & 0.7863 & 0.7863 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Delta $0.0000$ on all four. This is the only check that verifies the run is
+\emph{right} rather than merely well formed: a run built against the wrong
+index passes every schema and depth check. It is wired as a gate that exits
+non-zero.
+
+The dense run is \texttt{castorini/cosdpr-distil}, top-5{,}000 for all 97
+queries, contributed by Shubham.
+
+\subsection{The frozen universe}
+
+\begin{center}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Fingerprint & \fp{46d0807d8ed3} \\
+Queries & 97 \\
+$|\Uq|$ & 7{,}045--9{,}986 (median 9{,}097) \\
+Total pairs & \textbf{872{,}455} \\
+Judged fraction of $\Uq$ & 0.0165 (min 0.0026) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Reproduced bit-identical in three independent environments across two operating
+systems, which demonstrates most of the Week-4 reproducibility requirement
+early. The universe parquet itself is not committed: it is reproducible from the
+committed run tables plus the configuration, and the manifest records the
+fingerprint and size distribution so a rebuild is verifiable.
+
+\paragraph{The Stage-2 bill is the universe, once.}
+The cache keys on $(\text{query}, \text{doc})$ and every world re-ranks a
+subset of $\Uq$, so the union across both Stage-1 systems, all three $\Kc$,
+every $t$ and every outsider policy \emph{is} $\Uq$. The entire project costs
+$872{,}455$ cross-encoder calls --- not that many per world. At Chaitanya's
+measured throughput this is a single 27-minute job, which is what made the
+reference-subset sampling design unnecessary.
+
+\subsection{Feasibility gate}
+
+Three of the four feasibility questions are settled favourably.
+
+\begin{center}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+$\Kc$ & Jaccard & judged $\Cq$ (bm25/dpr) & density ratio & gain-carrying non-survivors \\
+\midrule
+100 & 0.163 & 0.51 / 0.48 & 28.6$\times$ / 26.9$\times$ & 6 / 6 \\
+500 & 0.136 & 0.178 / 0.158 & 10.9$\times$ / 9.3$\times$ & 3 / 3 \\
+1000 & 0.115 & 0.108 / 0.094 & 6.4$\times$ / 5.7$\times$ & 2 / 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Leverage: confirmed.} Candidate Jaccard of $0.11$--$0.16$. Two Stage-1
+systems selecting nearly the same documents would leave the cross-paradigm
+comparison nothing to separate, however different their scores.
+
+\textbf{Cross-paradigm confound: retired.} We expected the TREC 2019/2020
+pools to favour lexical runs, leaving BM25's candidate set better judged than
+DPR's. Measured, the ratio is $1.06\times$ at $\Kc{=}100$ and $1.15\times$ at
+$1000$: those pools included neural runs. The floor is symmetric too --- both
+systems retrieved exactly 5{,}000, so each floors $|\Uq| - 5000$ and the
+floored fraction is an identical $0.450$. The comparison is unconfounded on
+both axes that could have spoiled it.
+
+\textbf{Gate-failure supply: thin, and it drove a rule change.} See
+Section~\ref{sec:corrections}.
+
+\textbf{Judgment placement: the one open validity threat.} $\Uq$ is $1.65\%$
+judged while BM25's top-100 is $51\%$ judged. World~C sorts ${\sim}9{,}000$
+documents of which almost none are judged, so judged survivors are displaced
+out of the top-10 there, $U_d(\pi_{\text{no1}}) \to 0$, and
+$E_{\text{gate}} \to \mathrm{DCG}(\pi_{\text{act}})$ --- the gate would appear
+to account for \emph{all} retrieved utility as an artefact of where NIST placed
+judgments in 2019. Resolved procedurally at freeze~v2; see
+Section~\ref{sec:freeze}.
+
+\subsection{Stage-1 over the universe, and the allocations}
+
+The outsider policies need Stage-1 beyond depth $M$: \texttt{boundary} reads
+$s_1$ below the cutoff and \texttt{alternative} reads the other retriever's
+ranks over $\Dq = \Uq \setminus \Cq$. Each run was extended to all of $\Uq$
+under the floor policy (an unretrieved document scores strictly below
+everything the retriever returned --- exactly what it asserted, \emph{not in my
+top-M}).
+
+Policy supply turned out to be $40$--$49\times$ the budget at every depth
+(boundary $4{,}900/4{,}500/4{,}000$ genuinely ranked documents below the cutoff
+against budgets of $100/500/1000$), so both policies are real rather than
+nominal: neither has to draw from the tied floored block where the selection
+would be the \texttt{doc\_id} tie-break wearing a policy's name.
+
+$11{,}640$ allocations were then published and audited --- $1{,}319{,}200$
+promoted documents --- with four invariants all holding: every allocation
+spends exactly $B$; the four membership strata partition $\Uq$; $t{=}1$
+reproduces the plain cascade, so every $\Delta_t$ is measured against something
+that actually ran; and the random control's selection changed under a reseed in
+$100\%$ of settings, which is what makes it a control.
+
+\subsection{Reranker and power (contributed)}
+
+Chaitanya measured $535$ pairs/sec on a Colab T4 (MiniLM-L-12-v2,
+\texttt{float32}), giving ${\sim}27$ minutes for the whole universe or
+${\sim}9$ minutes each under a three-way shard plan. Mean sequence length
+${\sim}71$ tokens, max ${\sim}183$, far inside $\texttt{max\_length}{=}512$.
+The \textbf{shuffle-invariance test passed on the real reranker}, which
+verifies rather than assumes the pointwise property the entire
+$E_{\text{gate}}$ derivation rests on.
+
+Shubham's power simulation, re-run at the headline $\Kc{=}100$ and the real
+median $|\Uq|$ of $9{,}097$, returns: no subset smaller than all 97 queries
+reaches $0.80$ power, and even at 97 only the \texttt{alternative} outsider
+policy clears it ($0.935$ continuous, $0.875$ group). \texttt{boundary} falls
+short ($0.67$, $0.41$). Therefore \textbf{H7 is confirmatory for
+\texttt{alternative} and descriptive for \texttt{boundary}}, with
+\texttt{random} as the control, declared before any real effect exists.
+
+\section{Corrections and methodological findings}
+\label{sec:corrections}
+
+The most valuable output of the fortnight was five defects in shared code, four
+of them in checks that passed while being structurally unable to detect the
+failure they existed to catch.
+
+\paragraph{1. The H7 power denominator was conditional.}
+\texttt{required\_reference\_size} divided detections by the number of
+\emph{testable} draws. A subset with fewer than two queries in a group cannot
+be tested at all, which is an H7 failure rather than a draw to discard, so the
+reported power answered ``given the subset was testable'' and overstated what a
+real subset delivers. Now unconditional, with the conditional figure available
+separately. The stale column was \emph{removed} rather than kept, so a
+downstream rescaling that would have cancelled the fix raised an error instead
+and was found in the same change.
+
+\paragraph{2. ``Relevant'' disagreed with the gain map, by 4--9$\times$.}
+\texttt{shared/qrels.py} counted \texttt{relevance > 0}, which includes
+grade~1, while the frozen map scores grade~1 as $0.0$. A grade-1 non-survivor
+was therefore counted as a gate failure although excluding it costs no utility.
+Measured: at $\Kc{=}1000$ the DPR candidate set shows $9$ excluded relevant
+documents under the loose definition and exactly $1$ that carries gain. The
+headline $\Kc$ was about to be chosen from the first number. Both functions now
+take the gain map as a \emph{required} argument, so the definition travels with
+the configuration that set it.
+
+\paragraph{3. \texttt{trec\_eval} uses linear gain, not exponential.}
+The BM25 verifier must match the definition that produced the published
+figures. Implemented from memory as $2^{\text{rel}}-1$, it disagreed with
+\texttt{pytrec\_eval} immediately ($0.0799$ against $0.1116$ on the first
+random case). \texttt{ndcg\_cut} uses $\text{gain} = \text{rel}$. The wrong
+form would have ``verified'' the run against a number it structurally cannot
+reproduce, sending us hunting a nonexistent index problem. Pinned by tests that
+cross-check against the real \texttt{trec\_eval} C code where installed.
+
+\paragraph{4. The headline-$\Kc$ rule was mis-specified (self-correction).}
+The pre-declared rule --- largest $\Kc$ with median gain-carrying
+non-survivors $\geq 1$ --- selected $\Kc{=}1000$, where the median supply is
+$1$--$2$ and $36$--$39$ of $97$ queries have none at all. The error was
+conflating two jobs: ``$\geq 1$'' is a \emph{non-degeneracy floor}, and used as
+a \emph{selection} rule it chooses the deepest depth, which is exactly
+backwards --- a TREC pool is built from the top ${\sim}100$ of the systems of
+the day, so deeper $\Kc$ swallows more of the judged pool into $\Cq$ and leaves
+\emph{less} supply outside it.
+
+Separated, the rule takes the depth with greatest supply among those clearing
+the floor, which selects $\Kc{=}100$ (median supply $6$). This is a
+\emph{post-hoc change to a pre-declared rule} and is recorded as one. It is
+defensible only because gate-failure supply is measurable \emph{before} any
+effect is computed, so the choice cannot be driven by effect sizes; no
+threshold was tuned, and only the direction of the preference changed. A test
+feeds the rule a synthetic collection whose supply grows with depth, where it
+correctly selects a deeper headline --- the check that it is a rule and not a
+constant in disguise.
+
+\paragraph{5. The allocation spend check was vacuous.}
+\texttt{validate\_allocation} compared the submitted count against
+$\min(n_{\text{out}}, |\text{selected}|)$ --- the amount \emph{achieved} --- so
+a short allocation always matched its own shortfall and passed. It accepted an
+allocation submitting $1$ of a budget of $2$ with an outsider still available
+in $\Dq$: precisely the ``one point of the $t$ curve cheaper than the others''
+case its own docstring says it exists to refuse. The ceiling is the available
+pool, not the draw. Since \texttt{worlds.py} runs this on every world-D
+allocation, the stricter check now applies there too; nothing was relying on
+the loose behaviour, verified against all $11{,}640$ real allocations.
+
+\paragraph{6. Feature leakage in the predictors (open).}
+Found by Shubham in review, confirmed and sharpened: the Stage-2 features are
+built for all top-5{,}000 documents rather than for $\Cq$, while the code
+states ``Extra Stage-2 calls $=0$''. For a document outside $\Cq$ a cached
+Stage-2 score exists \emph{only because world C was computed}. The consequence
+is stronger than mis-stated cost: for a non-survivor $d$,
+$\mathrm{rank}_{\pi_{\text{act}}}(d)$ is undefined, so
+$e_{\text{gate}}(d) = -U_d(\pi_{\text{no1}})$, and $U_d(\pi_{\text{no1}})$ is
+fixed by $\mathrm{rank}_C(d)$, which the $s_2$ scores over $\Uq$ determine
+exactly. The feature does not approximate the target; it contains it. Note the
+25 tests pass either way --- the suite never asserts the $\Cq$ boundary for
+Stage-2 features, which is why it survived review-by-test. Stage-1 features
+over $\Uq$ remain legitimately free, since $s_1$ costs no GPU.
+
+\section{Freeze history}
+\label{sec:freeze}
+
+\paragraph{Freeze v1 (26 Oct), \fp{46d0807d8ed3}.} Dense Stage~1 is DPR
+(\texttt{cosdpr-distil}, replacing ANCE); Stage-1 systems and universe sources
+are BM25 and DPR; Stage~2 is a pointwise MiniLM cross-encoder; data is TREC-DL
+2019+2020; the gain map gives grades 0 and 1 zero gain.
+
+\paragraph{Freeze v2 (29 Oct), \fp{46d0807d8ed3} --- unchanged.} Both live
+decisions looked like configuration changes and neither was one, so the frozen
+universe, its sidecar and every manifest written against v1 remain valid.
+
+\textbf{Precision stays \texttt{float32}.} \texttt{float16} would take the fill
+from ${\sim}27$ to ${\sim}13$ minutes: a saving of $14$ minutes, once, for the
+entire project. Against it, every estimand is a difference of \emph{rank-based}
+utilities, and \texttt{float16} perturbs scores at ${\sim}10^{-3}$, which flips
+near-ties in a $9{,}000$-document ranking. How many, and whether they land
+where they matter, is unquantified --- and quantifying it would cost more GPU
+time than the saving. The cost side was already measured, so the decision
+needed no further evidence.
+
+\textbf{Unjudged competitors: compute every effect both ways, always.}
+Condensed-list evaluation (Sakai, \emph{Alternatives to Bpref}, SIGIR 2007)
+drops unjudged documents before ranks are assigned, so a judged document's rank
+counts only judged documents above it. Three reasons for computing both:
+
+\begin{itemize}
+\item \textbf{It costs no GPU.} Condensing transforms \emph{rankings}, not
+scores --- same cache, same $872{,}455$ calls, CPU only.
+\item \textbf{It is the only option that does not decide in the dark.} The
+measurement that would settle which mode is right --- the judged fraction of
+world C's top-10 --- does not exist until the cache is filled. Every other
+option commits now to a choice whose evidence arrives later. Pre-registration
+exists to fix the \emph{procedure} in advance, not to guess the answer.
+\item \textbf{It needs no configuration field.} If both are always computed
+there is no choice to encode, so the fingerprint does not move.
+\end{itemize}
+
+The \emph{primary} estimand remains the uncondensed one, because it is what a
+deployed policy would really do; the condensed figure is reported beside it as
+a robustness check. If the two disagree in sign or in which stratum dominates,
+that disagreement \emph{is} the finding and gets its own treatment rather than
+a footnote. Declared before any effect exists.
+
+\textbf{Also resolved:} cache seeding from existing scores dropped (${\sim}3$
+minutes of a 27-minute bill, against interleaving two scoring runs); SPLADE out
+(a third Stage-1 system would require rebuilding the frozen universe, and the
+Jaccard already gives ample leverage); hashing out per written criteria;
+reference subset all 97 queries. No open decisions remain in the log.
+
+\section{Commit history}
+
+\begin{longtable}{@{}llp{9.1cm}@{}}
+\toprule
+Commit & Date & Subject \\
+\midrule
+\endfirsthead
+\toprule
+Commit & Date & Subject \\
+\midrule
+\endhead
+\multicolumn{3}{@{}l}{\textit{Week 1 --- setup, shared contracts, Stage-1 runs}} \\
+\texttt{75a7d7f} & 26 Oct & Initial commit \\
+\texttt{0e9e293} & 27 Oct & Shared code: engine, worlds, effects, strata, metrics, schema \\
+\texttt{b5a6b86} & 27 Oct & \textit{PR \#1} DPR Stage-1 run, cosDPR-distil, top-5000 (H1) \\
+\texttt{80d9e21} & 27 Oct & World runner and budget runner (counterfactual engine) \\
+\texttt{f9def56} & 27 Oct & E1 synthetic validation and the H7 power simulation \\
+\texttt{479eeee} & 27 Oct & Record E1 and H7 results; fix the E1 gate check \\
+\texttt{3940aa2} & 27 Oct & Re-record E1 and H7 manifests from committed code \\
+\texttt{bb729df} & 27 Oct & \textit{PR \#2} counterfactual engine, E1, H7 power (H2) \\
+\texttt{20dbf56} & 28 Oct & Loaders, split, retrievers, Stage-1 runner, universe builder \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textit{Week 2 --- data artefacts, feasibility, decisions}} \\
+\texttt{594e855} & 28 Oct & \textbf{Fix:} make H7 power unconditional; drop stale rescaling \\
+\texttt{839e1f0} & 28 Oct & BM25 run (top-5000, 97 queries) and the frozen universe \\
+\texttt{1b0df38} & 28 Oct & Re-record the universe manifest (identical universe) \\
+\texttt{90cfc0d} & 28 Oct & Week-1 handoff note; refresh stale README claims \\
+\texttt{8a099e3} & 29 Oct & Re-record H7 power against the fixed diagnosis module \\
+\texttt{fb66cac} & 29 Oct & Import torch lazily; skip DPR tests where torch is absent \\
+\texttt{0adfed4} & 29 Oct & H7 power at the feasibility report's headline $\Kc$ \\
+\texttt{35155fa} & 29 Oct & Effect analysis: distributions, labels, additivity, diagnosis \\
+\texttt{4fb5f7d} & 29 Oct & Restate H2 at headline $\Kc{=}100$ and the frozen $|\Uq|$ \\
+\texttt{36392db} & 29 Oct & Record Week-2 decisions, throughput and H2 \\
+\texttt{427faf5} & 29 Oct & Drop the \texttt{test\_dpr} ignore from \texttt{make test-all} \\
+\texttt{8f779a5} & 29 Oct & \textit{PR \#4} effect analysis, H2 at $\Kc{=}100$, lazy torch \\
+\texttt{e1caac9} & 29 Oct & Extend Stage-1 to $\Uq$ under the floor policy \\
+\texttt{b6f8930} & 29 Oct & Publish the reference subset and the $t$-allocations, with audits \\
+\texttt{66b8904} & 29 Oct & \textbf{Fix:} cap expected spend by what was available \\
+\texttt{0f56ec9} & 29 Oct & \textbf{Freeze v2}: fingerprint unchanged, all decisions recorded \\
+\texttt{d3d5b9c} & 29 Oct & Add the condensed ranking mode to every effect (freeze v2) \\
+\bottomrule
+\end{longtable}
+
+\noindent
+Twenty-nine commits across four merged pull requests. Shared-module changes go
+via pull request; each member's own directory goes direct to \texttt{main}.
+\textbf{PR \#3} (Chaitanya, $+3{,}076$ lines across 12 files) is open pending
+the leakage fix.
+
+\section{Current state}
+
+\begin{center}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Configuration fingerprint & \fp{46d0807d8ed3} (v1 = v2) \\
+Queries / judgments & 97 / 20{,}646 \\
+Split (seed 42) & 49 train / 19 val / 29 test, by query \\
+BM25 verification & exact, $\Delta = 0.0000$ on all four measures \\
+$|\Uq|$ & 7{,}045--9{,}986 (median 9{,}097) \\
+Universe pairs & 872{,}455 \\
+Stage-1 floored fraction & 0.450, identical for both systems \\
+Headline $\Kc$ & 100 \\
+Reference subset & all 97 queries \\
+Allocations audited & 11{,}640 \\
+Stage-2 bill & 872{,}455 pairs, ${\sim}27$ min on one T4 \\
+Tests passing & 415 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Future work}
+
+\subsection{Week 3 --- fill the cache, compute real effects}
+
+\begin{enumerate}
+\item \textbf{Blocking:} the PR \#3 leakage fix, after which the synthetic
+fidelity numbers must be regenerated and all three baselines will move.
+\item Fill the Stage-2 cache over $\Uq$ under the three-way shard plan:
+${\sim}9$ minutes each, resumable and shardable with a merge step.
+\item Compute $E_{\text{rerank}}$, $E_{\text{gate}}$ and $\Delta_t$ over the
+real universe, in both the uncondensed and condensed modes, with stratified
+validation throughout.
+\item \textbf{The decisive measurement:} the judged fraction of world C's
+top-10. If it is ${\sim}20\%$ unjudged, the judgment-placement concern is a
+footnote; if ${\sim}95\%$, $E_{\text{gate}}$ as primarily specified is not
+measuring the gate and the condensed figure becomes the headline.
+\item Diagnosis labels and the H7 test, with group sizes reported beside every
+$p$-value, confirmatory only for \texttt{alternative}.
+\end{enumerate}
+
+\subsection{Week 4 --- analysis and reporting}
+
+Effect distributions by stratum; the cost--fidelity curve, which must converge
+to the exact reference at full budget; utility versus $t$; the H7 comparison;
+a worked gating-failure example. Predictor fidelity against all three baselines
+(zero, membership-only, stratum-mean), fitted on training queries only. Full
+compute accounting. The reproducibility pack --- already largely demonstrated
+by three bit-identical universe rebuilds across two operating systems.
+
+\subsection{Known risks}
+
+\begin{itemize}
+\item \textbf{Judgment sparsity} is the main threat to $E_{\text{gate}}$ and is
+mitigated procedurally rather than solved. The decisive measurement is
+scheduled for the moment scores exist.
+\item \textbf{H7 is descriptive for \texttt{boundary}} at any feasible subset
+size. This is a declared limitation, not a result to be improved by tuning.
+\item \textbf{Gate-failure supply is thin even at the headline depth} --- a
+median of 6 gain-carrying non-survivors, with 17--23 of 97 queries having none.
+Per-query effect distributions will be noisy and must be reported with their
+supply.
+\item \textbf{Grade-1 prevalence} meant the usable relevant supply was
+4--9$\times$ smaller than the naive count. Any future collection needs the same
+check before its $\Kc$ is chosen.
+\end{itemize}
+
+\section*{Reproducing this state}
+
+\begin{verbatim}
+git clone https://github.com/a-n-u-p-a-m/IRE_PROJECT.git && cd IRE_PROJECT
+pip install -r requirements.txt
+make test-all                                      # 415 tests
+make smoke-week1                                   # whole chain, no GPU, ~5s
+
+python -m experiments_shubham.fetch_trec_dl        # queries + qrels
+python -m experiments_anupam.data_prep             # qrels parquet + split
+python -m experiments_anupam.run_stage1 --system bm25      # needs Pyserini
+python -m experiments_anupam.verify_bm25           # gate: exact or exit 1
+python -m experiments_anupam.build_universe --qrels data/qrels.parquet
+python -m experiments_anupam.feasibility_report
+python -m experiments_anupam.stage1_over_universe
+python -m experiments_anupam.reference_subset
+python -m experiments_anupam.allocations
+\end{verbatim}
+
+\noindent
+Large derived artefacts are not committed; they are reproducible from the
+committed run tables plus the frozen configuration, and every manifest records
+the fingerprint it was produced under. Full reasoning for every decision above
+is in \texttt{docs/design\_log.md}.
+
+\end{document}
