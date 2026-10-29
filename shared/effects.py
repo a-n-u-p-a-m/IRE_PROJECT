@@ -22,6 +22,15 @@ Rows are emitted for EVERY document in the universe, judged or not. Restricting
 to the judged subset happens at analysis time, so the unjudged competitors stay
 visible in the ranking that produced the numbers - they really did occupy those
 positions.
+
+That is the primary mode. `condensed=True` gives the robustness check decided
+at freeze v2: every world's ranking is condensed (`utility.condense`) before
+ranks are assigned, so a judged document's rank counts only judged documents
+above it. Worlds, candidate sets and allocations are unchanged - only the
+ranks are recounted - so it needs no Stage-2 call. Unjudged documents have no
+rank in a condensed world, and rows are emitted for judged documents only.
+The sign invariants survive condensing: dropping the same documents from both
+rankings cannot move a survivor above a judged competitor it was below.
 """
 
 from __future__ import annotations
@@ -41,7 +50,14 @@ from .schema import (
     empty,
     validate_effect,
 )
-from .utility import GainMap, UtilityKind, document_utility, is_monotone, ranks_of
+from .utility import (
+    GainMap,
+    UtilityKind,
+    condense,
+    document_utility,
+    is_monotone,
+    ranks_of,
+)
 from .worlds import TWorld, Worlds
 
 logger = logging.getLogger(__name__)
@@ -71,6 +87,7 @@ def _row(
     rank_control: int | None,
     u_treatment: float,
     u_control: float,
+    condensed: bool = False,
     budget_b: int | None = None,
     t: float | None = None,
     policy: str | None = None,
@@ -84,6 +101,7 @@ def _row(
         "k_c": k_c,
         "k": k,
         "utility": utility,
+        "condensed": condensed,
         "budget_b": budget_b,
         "t": t,
         "policy": policy,
@@ -108,7 +126,18 @@ def _typed(df: pd.DataFrame) -> pd.DataFrame:
         df[col] = df[col].astype("Int64")
     df["t"] = df["t"].astype("float64")
     df["judged"] = df["judged"].astype("boolean")
+    df["condensed"] = df["condensed"].astype("boolean")
     return df
+
+
+def _judged_only(
+    universe: Sequence[str],
+    rankings: Sequence[Sequence[str]],
+    judged: Mapping[str, bool],
+) -> tuple[list[str], list[list[str]]]:
+    """The judged documents, and every ranking condensed to them."""
+    keep = {d for d in universe if judged.get(d, False)}
+    return [d for d in universe if d in keep], [condense(r, keep) for r in rankings]
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -124,11 +153,15 @@ def stage_effects_for_query(
     gain_map: GainMap,
     utility: UtilityKind = "dcg",
     persistence: float = 0.8,
+    *,
+    condensed: bool = False,
 ) -> pd.DataFrame:
     """E_rerank and E_gate for every document in the universe, for one query."""
-    r_act = ranks_of(worlds.pi_act)
-    r_no2 = ranks_of(worlds.pi_no2)
-    r_no1 = ranks_of(worlds.pi_no1)
+    docs = worlds.universe
+    rankings = (worlds.pi_act, worlds.pi_no2, worlds.pi_no1)
+    if condensed:
+        docs, rankings = _judged_only(docs, rankings, judged)
+    r_act, r_no2, r_no1 = (ranks_of(r) for r in rankings)
     cand = worlds.candidate_set
 
     def u(rank: int | None, doc: str) -> float:
@@ -137,7 +170,7 @@ def stage_effects_for_query(
         )
 
     rows = []
-    for doc in worlds.universe:
+    for doc in docs:
         stratum = SURVIVOR if doc in cand else NON_SURVIVOR
         is_judged = bool(judged.get(doc, False))
         ra, r2, r1 = r_act.get(doc), r_no2.get(doc), r_no1.get(doc)
@@ -146,6 +179,7 @@ def stage_effects_for_query(
         common = dict(
             query_id=worlds.query_id, doc_id=doc, stage1_system=stage1_system,
             k_c=worlds.k_c, k=k, utility=utility, stratum=stratum, judged=is_judged,
+            condensed=condensed,
         )
         rows.append(_row(
             effect_type=E_RERANK, rank_treatment=ra, rank_control=r2,
@@ -173,6 +207,8 @@ def budget_effects_for_query(
     gain_map: GainMap,
     utility: UtilityKind = "dcg",
     persistence: float = 0.8,
+    *,
+    condensed: bool = False,
 ) -> pd.DataFrame:
     """
     Delta_t for every t in the grid, measured against the t=1 world.
@@ -187,8 +223,12 @@ def budget_effects_for_query(
             "budget effects need the t=1 world as a baseline; build it even "
             "when it is not otherwise of interest"
         )
-    base = t_worlds[1.0]
-    r_base = ranks_of(base.pi_t)
+    docs = worlds.universe
+    rank_t = {t: tw.pi_t for t, tw in t_worlds.items()}
+    if condensed:
+        docs, ranked = _judged_only(docs, list(rank_t.values()), judged)
+        rank_t = dict(zip(rank_t, ranked))
+    r_base = ranks_of(rank_t[1.0])
 
     def u(rank: int | None, doc: str) -> float:
         return document_utility(
@@ -199,15 +239,16 @@ def budget_effects_for_query(
     for t, tw in sorted(t_worlds.items()):
         if t == 1.0:
             continue                      # the baseline has nothing to compare to
-        r_t = ranks_of(tw.pi_t)
-        for doc in worlds.universe:
+        r_t = ranks_of(rank_t[t])
+        for doc in docs:
             rows.append(_row(
                 query_id=worlds.query_id, doc_id=doc, stage1_system=stage1_system,
                 effect_type=DELTA_T, k_c=worlds.k_c, k=k, utility=utility,
                 stratum=tw.strata.get(doc, ""), judged=bool(judged.get(doc, False)),
                 rank_treatment=r_t.get(doc), rank_control=r_base.get(doc),
                 u_treatment=u(r_t.get(doc), doc), u_control=u(r_base.get(doc), doc),
-                budget_b=tw.budget_b, t=tw.t, policy=tw.policy, seed=tw.seed,
+                condensed=condensed, budget_b=tw.budget_b, t=tw.t, policy=tw.policy,
+                seed=tw.seed,
             ))
 
     return _typed(pd.DataFrame(rows))
@@ -260,7 +301,8 @@ def check_additivity(effects: pd.DataFrame) -> pd.DataFrame:
     wide = (
         effects[effects["effect_type"].isin([E_RERANK, E_GATE])]
         .pivot_table(
-            index=["query_id", "doc_id", "stage1_system", "k_c", "k", "utility"],
+            index=["query_id", "doc_id", "stage1_system", "k_c", "k", "utility",
+                   "condensed"],
             columns="effect_type",
             values=["effect", "utility_treatment"],
             aggfunc="first",
@@ -290,7 +332,8 @@ def label_documents(effects: pd.DataFrame, tau_document: float) -> pd.DataFrame:
     """
     stage = effects[effects["effect_type"].isin([E_RERANK, E_GATE])]
     wide = stage.pivot_table(
-        index=["query_id", "doc_id", "stage1_system", "k_c", "k", "utility", "stratum"],
+        index=["query_id", "doc_id", "stage1_system", "k_c", "k", "utility",
+               "condensed", "stratum"],
         columns="effect_type",
         values=["effect", "utility_control"],
         aggfunc="first",
@@ -346,10 +389,10 @@ def recovered_outsiders(effects: pd.DataFrame, k: int | None = None) -> pd.DataF
 
 def summarise(effects: pd.DataFrame) -> pd.DataFrame:
     """Compact per-(effect_type, stratum) summary, reported separately always."""
-    group = ["effect_type", "stage1_system", "k_c", "utility", "stratum"]
+    group = ["effect_type", "stage1_system", "k_c", "utility", "condensed", "stratum"]
     if effects["t"].notna().any():
-        group = ["effect_type", "stage1_system", "k_c", "utility", "t", "policy",
-                 "stratum"]
+        group = ["effect_type", "stage1_system", "k_c", "utility", "condensed", "t",
+                 "policy", "stratum"]
     return (
         effects.groupby(group, observed=True, dropna=False)
         .agg(

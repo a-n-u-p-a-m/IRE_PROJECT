@@ -19,6 +19,12 @@ is trusted:
 Strict is the default. `strict=False` relaxes only the E_gate sign checks and
 is for a listwise Stage 2, which is a different estimand.
 
+Every grid run computes both ranking modes (freeze v2) and writes them to
+separate files: `{system}_stage_kc{K}.parquet` is the primary, uncondensed
+estimand, and the same name with `_condensed` is the robustness check in which
+unjudged documents are dropped before ranks are assigned. Separate files mean
+that loading the primary table can never pick up condensed rows by accident.
+
 Inputs are per-query `QueryInputs`, so the same runners take the synthetic
 generator now and the frozen universe plus Stage-2 cache in Week 3:
 
@@ -60,6 +66,9 @@ from shared.worlds import build_t_grid, build_worlds, verify_isolation, verify_t
 
 logger = logging.getLogger(__name__)
 
+# Ranking modes, primary first: uncondensed, then condensed.
+MODES = (False, True)
+
 
 @dataclass(frozen=True)
 class QueryInputs:
@@ -98,6 +107,14 @@ def _finish(frames: list[pd.DataFrame], settings: EffectSettings,
     return effects
 
 
+def table_name(system: str, k_c: int, policy: str | None = None,
+               condensed: bool = False) -> str:
+    """File stem of one grid table: stage effects, or budget effects at a policy."""
+    name = (f"{system}_stage_kc{k_c}" if policy is None
+            else f"{system}_budget_kc{k_c}_{policy}")
+    return f"{name}_condensed" if condensed else name
+
+
 # ──────────────────────────────────────────────────────────────────────
 # World runner: A, B, C
 # ──────────────────────────────────────────────────────────────────────
@@ -107,6 +124,7 @@ def run_worlds(
     k_c: int,
     settings: EffectSettings,
     strict: bool = True,
+    condensed: bool = False,
 ) -> pd.DataFrame:
     """E_rerank and E_gate for every document of every query at one K_c."""
     frames = []
@@ -116,6 +134,7 @@ def run_worlds(
         frames.append(stage_effects_for_query(
             w, q.relevance, q.judged, settings.stage1_system, settings.k,
             settings.gain_map, settings.utility, settings.persistence,
+            condensed=condensed,
         ))
     return _finish(frames, settings, strict)
 
@@ -133,6 +152,7 @@ def run_budget(
     seeds: Sequence[int],
     settings: EffectSettings,
     strict: bool = True,
+    condensed: bool = False,
 ) -> pd.DataFrame:
     """
     Delta_t for every document of every query at one K_c and one policy.
@@ -157,6 +177,7 @@ def run_budget(
             frame = budget_effects_for_query(
                 w, tw, q.relevance, q.judged, settings.stage1_system, settings.k,
                 settings.gain_map, settings.utility, settings.persistence,
+                condensed=condensed,
             )
             if not randomised:
                 frame["seed"] = pd.NA
@@ -177,6 +198,7 @@ class GridTable:
     k_c: int
     policy: str | None
     effects: pd.DataFrame
+    condensed: bool = False
 
 
 def grid_t(cfg: FrozenConfig, include_optional_t: bool = False) -> tuple[float, ...]:
@@ -193,23 +215,30 @@ def iter_grid(
     budget_for: Callable[[int], int] | None = None,
     include_optional_t: bool = False,
     strict: bool = True,
+    modes: Sequence[bool] = MODES,
 ) -> Iterator[GridTable]:
     """
-    Every K_c, and for world D every policy and seed, one table at a time.
+    Every K_c, and for world D every policy and seed, one table at a time, in
+    every ranking mode.
 
-    One table per K_c for the stage effects and per (K_c, policy) for the
-    budget effects keeps each one small enough to validate in memory.
+    One table per (K_c, mode) for the stage effects and per (K_c, policy,
+    mode) for the budget effects keeps each one small enough to validate in
+    memory.
     """
     budget_for = budget_for or cfg.budget_for
     t_grid = grid_t(cfg, include_optional_t)
     system = settings.stage1_system
     for k_c in cfg.candidate_depths:
-        stage = run_worlds(queries, k_c, settings, strict)
-        yield GridTable(f"{system}_stage_kc{k_c}", k_c, None, stage)
+        for condensed in modes:
+            stage = run_worlds(queries, k_c, settings, strict, condensed)
+            yield GridTable(table_name(system, k_c, None, condensed), k_c, None,
+                            stage, condensed)
         for policy in cfg.outsider_policies:
-            budget = run_budget(queries, k_c, budget_for(k_c), t_grid, policy,
-                                cfg.budget_seeds, settings, strict)
-            yield GridTable(f"{system}_budget_kc{k_c}_{policy}", k_c, policy, budget)
+            for condensed in modes:
+                budget = run_budget(queries, k_c, budget_for(k_c), t_grid, policy,
+                                    cfg.budget_seeds, settings, strict, condensed)
+                yield GridTable(table_name(system, k_c, policy, condensed), k_c,
+                                policy, budget, condensed)
 
 
 def run_grid(
@@ -221,6 +250,7 @@ def run_grid(
     include_optional_t: bool = False,
     strict: bool = True,
     extra_manifest: Mapping | None = None,
+    modes: Sequence[bool] = MODES,
 ) -> dict[str, Path]:
     """The whole grid, written one validated Parquet file per table."""
     out_dir = Path(out_dir)
@@ -232,7 +262,7 @@ def run_grid(
     summaries = []
     start = time.perf_counter()
     for table in iter_grid(queries, cfg, settings, budget_for, include_optional_t,
-                           strict):
+                           strict, modes):
         path = out_dir / f"{table.name}.parquet"
         written[table.name] = save(table.effects, path, "effect", strict)
         summaries.append(summarise(table.effects))
@@ -248,7 +278,8 @@ def run_grid(
         "budgets": {k: budget_for(k) for k in cfg.candidate_depths},
         "t_grid": list(t_grid), "policies": list(cfg.outsider_policies),
         "seeds": list(cfg.budget_seeds), "k": settings.k, "utility": settings.utility,
-        "strict": strict, "files": sorted(p.name for p in written.values()),
+        "strict": strict, "condensed_modes": list(modes),
+        "files": sorted(p.name for p in written.values()),
         "seconds": round(time.perf_counter() - start, 1),
         **dict(extra_manifest or {}),
     })

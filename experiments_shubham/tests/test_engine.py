@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import replace
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from experiments_shubham.engine import (
+    MODES,
     EffectSettings,
     QueryInputs,
     run_budget,
@@ -136,11 +139,90 @@ def test_grid_writes_validated_tables_and_manifest(cfg, tmp_path):
 
     tables = {n: p for n, p in written.items() if p.suffix == ".parquet"}
     n_kc, n_policies = len(cfg.candidate_depths), len(cfg.outsider_policies)
-    assert len(tables) == n_kc * (1 + n_policies)
-    for path in tables.values():
-        load(path, "effect", strict=True)
+    assert len(tables) == len(MODES) * n_kc * (1 + n_policies)
+    for name, path in tables.items():
+        eff = load(path, "effect", strict=True)
+        assert (eff["condensed"] == name.endswith("_condensed")).all()
 
     manifest = json.loads(written["manifest"].read_text())
     assert manifest["config_fingerprint"] == cfg.fingerprint()
     assert manifest["owner"] == "shubham" and manifest["strict"] is True
     assert manifest["budgets"] == {str(k): k for k in cfg.candidate_depths}
+    assert manifest["condensed_modes"] == [False, True]
+
+
+# ── condensed mode ────────────────────────────────────────────────────
+
+def _with_unjudged(queries, share, seed=7):
+    """The same queries with a random share of documents unjudged."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for q in queries:
+        judged = {d: bool(rng.random() >= share) for d in q.universe}
+        out.append(replace(q, judged=judged, relevance={
+            d: r for d, r in q.relevance.items() if judged[d]}))
+    return out
+
+
+def _recount(plain, queries, settings):
+    """
+    Condensed ranks and effects derived from the uncondensed table alone: a
+    judged document's condensed rank is its position among the judged
+    documents of the same uncondensed ranking.
+    """
+    gain = {(q.query_id, d): settings.gain_map.get(int(r), 0.0)
+            for q in queries for d, r in q.relevance.items()}
+    df = plain[plain["judged"].fillna(False)].copy()
+    g = np.array([gain.get(key, 0.0) for key in zip(df["query_id"], df["doc_id"])])
+    groups = df.groupby(["query_id", "effect_type", "t", "seed"], dropna=False,
+                        observed=True)
+    utility = {}
+    for col in ("rank_treatment", "rank_control"):
+        r = groups[col].rank(method="first").to_numpy(float)
+        df[col] = r
+        inside = ~np.isnan(r) & (r <= settings.k)
+        utility[col] = np.where(inside, g / np.log2(1.0 + np.where(inside, r, 1.0)), 0.0)
+    df["effect"] = utility["rank_treatment"] - utility["rank_control"]
+    return df
+
+
+def _by_key(df):
+    keys = ["query_id", "doc_id", "effect_type", "t", "seed"]
+    out = df.assign(t=df["t"].fillna(-1.0), seed=df["seed"].astype("Float64").fillna(-1))
+    return out.set_index(keys).sort_index()
+
+
+@pytest.mark.parametrize("policy", [None, "boundary", "random"])
+def test_condensed_effects_recount_the_uncondensed_ranks(cfg, policy):
+    queries = _with_unjudged(synthetic_inputs(synthetic_frame(
+        cfg, "weak_retriever", n_queries=3, n_docs=400, stress_kc=100)), share=0.6)
+    settings = EffectSettings.from_config(cfg, "synthetic")
+    assert settings.utility == "dcg"
+
+    def run(condensed):
+        if policy is None:
+            return run_worlds(queries, 100, settings, condensed=condensed)
+        return run_budget(queries, 100, 100, cfg.t_grid, policy, cfg.budget_seeds,
+                          settings, condensed=condensed)
+
+    plain, cond = run(False), run(True)
+    got, want = _by_key(cond), _by_key(_recount(plain, queries, settings))
+    assert got.index.equals(want.index)          # exactly the judged documents
+    for col in ("rank_treatment", "rank_control"):
+        assert np.array_equal(got[col].astype("Float64").fillna(0).to_numpy(float),
+                              np.nan_to_num(want[col].to_numpy(float)))
+    assert np.allclose(got["effect"].to_numpy(float), want["effect"].to_numpy(float),
+                       atol=1e-12)
+    # not vacuous: condensing really moved some judged documents
+    before = _by_key(plain).loc[got.index, "rank_control"].astype("Float64")
+    assert (before.fillna(0) != got["rank_control"].astype("Float64").fillna(0)).any()
+
+
+def test_condensing_changes_nothing_when_everything_is_judged(cfg):
+    queries = synthetic_inputs(synthetic_frame(cfg, "weak_retriever", n_queries=2,
+                                               n_docs=300, stress_kc=100))
+    settings = EffectSettings.from_config(cfg, "synthetic")
+    plain = run_worlds(queries, 100, settings)
+    cond = run_worlds(queries, 100, settings, condensed=True)
+    pd.testing.assert_frame_equal(plain.drop(columns="condensed"),
+                                  cond.drop(columns="condensed"))

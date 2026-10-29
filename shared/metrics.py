@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sps
 
+from .schema import single_mode
 from .strata import INFORMATIVE_STRATA, STRUCTURAL_ZERO
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,7 @@ def evaluate_within_strata(
     against a constant is undefined and reporting NaN invites someone to fill
     the cell in later.
     """
+    single_mode(frame, "evaluate_within_strata")
     df = frame[frame["effect_type"] == effect_type]
     if judged_only:
         df = df[df["judged"].fillna(False)]
@@ -299,6 +301,7 @@ def pooled_fidelity(
     pooled number reported must sit beside the corresponding shortcut baseline
     from `shared.baselines`, and must never be the headline.
     """
+    single_mode(frame, "pooled_fidelity")
     df = frame[frame["effect_type"] == effect_type]
     if judged_only:
         df = df[df["judged"].fillna(False)]

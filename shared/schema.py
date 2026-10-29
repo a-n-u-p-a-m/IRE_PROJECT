@@ -22,6 +22,13 @@ share invariants:
 So sign checking is conditional on effect_type. A single unconditional
 validator would either reject correct delta_t rows or wave through incorrect
 e_gate rows; both have happened in earlier drafts of this project.
+
+Every effect is computed in two ranking modes (freeze v2), told apart by the
+`condensed` key column. False is the primary estimand: unjudged documents
+occupy ranks as competitors. True is the robustness check: unjudged documents
+are dropped before ranks are assigned (Sakai, SIGIR 2007). The same sign
+invariants hold in both. Never aggregate across modes: `select_mode` picks one,
+and `single_mode` refuses a frame that holds both.
 """
 
 from __future__ import annotations
@@ -102,6 +109,7 @@ EFFECT_COLUMNS: dict[str, str] = {
     "k_c": "Int64",
     "k": "Int64",
     "utility": "string",
+    "condensed": "boolean",     # ranks counted over judged documents only
     "budget_b": "Int64",        # NA unless effect_type == delta_t
     "t": "float64",             # NA unless effect_type == delta_t
     "policy": "string",         # outsider policy; NA unless delta_t
@@ -139,7 +147,8 @@ _KEYS: dict[str, list[str]] = {
     "qrels": ["query_id", "doc_id"],
     "stage2_cache": ["query_id", "doc_id", "model"],
     "effect": ["query_id", "doc_id", "stage1_system", "effect_type",
-               "k_c", "k", "utility", "budget_b", "t", "policy", "seed"],
+               "k_c", "k", "utility", "condensed", "budget_b", "t", "policy",
+               "seed"],
     "feature": ["query_id", "doc_id", "feature_name", "feature_version"],
 }
 
@@ -383,6 +392,27 @@ def validate_effect(df: pd.DataFrame, strict: bool = True) -> pd.DataFrame:
     return out
 
 
+def select_mode(df: pd.DataFrame, condensed: bool = False) -> pd.DataFrame:
+    """The effect rows of one ranking mode; the primary (uncondensed) by default."""
+    return df[df["condensed"].eq(condensed).fillna(False).astype(bool)]
+
+
+def single_mode(df: pd.DataFrame, where: str = "this computation") -> pd.DataFrame:
+    """
+    Refuse a frame that mixes the two ranking modes.
+
+    Each (query, document) appears once per mode, so anything that sums,
+    averages or correlates effects over a mixed frame counts every document
+    twice and blends two estimands. A frame without the column passes.
+    """
+    if "condensed" in df.columns and df["condensed"].nunique(dropna=True) > 1:
+        raise SchemaError(
+            f"{where}: the frame mixes condensed and uncondensed effects. "
+            "Pick one mode with shared.schema.select_mode first."
+        )
+    return df
+
+
 _VALIDATORS = {
     "run": validate_run,
     "universe": validate_universe,
@@ -430,5 +460,5 @@ __all__ = [
     "STAGE2_CACHE_COLUMNS", "EFFECT_COLUMNS", "FEATURE_COLUMNS",
     "empty", "validate", "validate_run", "validate_universe", "validate_qrels",
     "validate_stage2_cache", "validate_effect", "validate_feature",
-    "save", "load",
+    "select_mode", "single_mode", "save", "load",
 ]

@@ -20,6 +20,11 @@ ones in Week 3:
                     and the continuous one-sided Spearman(G_q, Delta DCG), with
                     group sizes beside every p-value
 
+Each of these runs once per ranking mode, reading that mode's own files, and
+every output row carries `condensed`. False is the primary estimand; True is
+the robustness check reported beside it (freeze v2). The modes are never
+pooled: `diagnose` and `budget_outcomes` refuse a frame that mixes them.
+
     python -m experiments_shubham.engine --regime weak_retriever
     python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever \\
         --system synthetic
@@ -30,13 +35,14 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from experiments_shubham.engine import MODES, table_name
 from experiments_shubham.power_h7 import headline_k_c
 from shared.config import FrozenConfig, load_config
 from shared.diagnosis import (
@@ -48,20 +54,23 @@ from shared.diagnosis import (
 )
 from shared.effects import check_additivity, gating_failures, label_documents
 from shared.provenance import run_manifest, write_manifest
-from shared.schema import E_GATE, E_RERANK, load
+from shared.schema import E_GATE, E_RERANK, load, single_mode
 
 logger = logging.getLogger(__name__)
 
 QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
 
 
-def load_stage(effects_dir: str | Path, system: str, k_c: int) -> pd.DataFrame:
-    return load(Path(effects_dir) / f"{system}_stage_kc{k_c}.parquet", "effect")
+def load_stage(effects_dir: str | Path, system: str, k_c: int,
+               condensed: bool = False) -> pd.DataFrame:
+    name = table_name(system, k_c, None, condensed)
+    return load(Path(effects_dir) / f"{name}.parquet", "effect")
 
 
-def load_budget(effects_dir: str | Path, system: str, k_c: int,
-                policies) -> dict[str, pd.DataFrame]:
-    return {p: load(Path(effects_dir) / f"{system}_budget_kc{k_c}_{p}.parquet", "effect")
+def load_budget(effects_dir: str | Path, system: str, k_c: int, policies,
+                condensed: bool = False) -> dict[str, pd.DataFrame]:
+    return {p: load(Path(effects_dir) / f"{table_name(system, k_c, p, condensed)}.parquet",
+                    "effect")
             for p in policies}
 
 
@@ -72,7 +81,7 @@ def load_budget(effects_dir: str | Path, system: str, k_c: int,
 def distributions(effects: pd.DataFrame, judged_only: bool = False) -> pd.DataFrame:
     """Per (effect type, K_c, t, policy, stratum): always with its size."""
     eff = effects[effects["judged"].fillna(False)] if judged_only else effects
-    keys = ["effect_type", "k_c", "t", "policy", "stratum"]
+    keys = ["condensed", "effect_type", "k_c", "t", "policy", "stratum"]
     rows = []
     for key, blk in eff.groupby(keys, dropna=False, observed=True):
         x = blk["effect"].to_numpy(float)
@@ -96,6 +105,7 @@ def diagnose(stage: pd.DataFrame, tau_query: float) -> pd.DataFrame:
     effect table: summing a per-document effect over the universe gives the
     system-level DCG difference, because DCG@k is a sum of document utilities.
     """
+    single_mode(stage, "diagnose")
     act = (stage[stage["effect_type"] == E_RERANK]
            .groupby("query_id", observed=True)["utility_treatment"].sum())
     total = stage.groupby(["query_id", "effect_type"], observed=True)["effect"].sum()
@@ -120,6 +130,7 @@ def budget_outcomes(budgets: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     """DCG@k at each t minus DCG@k at t=1, per (query, policy, t); random: mean over seeds."""
     frames = []
     for policy, budget in budgets.items():
+        single_mode(budget, f"budget_outcomes[{policy}]")
         per_run = (budget.assign(seed=budget["seed"].fillna(-1))
                    .groupby(["query_id", "t", "seed"], observed=True)["effect"].sum()
                    .groupby(["query_id", "t"]).mean().rename("delta_dcg").reset_index())
@@ -216,29 +227,48 @@ def additivity_figure(stage: pd.DataFrame, path: str | Path, title: str = "") ->
 # The run
 # ──────────────────────────────────────────────────────────────────────
 
+def _mode_name(condensed: bool) -> str:
+    return "condensed" if condensed else "uncondensed"
+
+
 def run(effects_dir: str | Path, system: str, k_c: int, cfg: FrozenConfig,
-        out_dir: str | Path, n_permutations: int = 10000) -> dict:
+        out_dir: str | Path, n_permutations: int = 10000,
+        modes: Sequence[bool] = MODES) -> dict:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stage = load_stage(effects_dir, system, k_c)
-    budgets = load_budget(effects_dir, system, k_c, cfg.outsider_policies)
+    parts: dict[str, list[pd.DataFrame]] = {}
+    additivity, label_counts = {}, {}
+    for condensed in modes:
+        stage = load_stage(effects_dir, system, k_c, condensed)
+        budgets = load_budget(effects_dir, system, k_c, cfg.outsider_policies, condensed)
 
-    dist = pd.concat([distributions(e, judged) for e in [stage, *budgets.values()]
-                      for judged in (False, True)], ignore_index=True)
-    diag = diagnose(stage, cfg.tau_query)
-    outcomes = budget_outcomes(budgets)
-    tests = h7(diag, outcomes, n_permutations, cfg.seed)
-    labels = label_summary(stage, cfg.tau_document)
-    examples = gating_failure_examples(stage)
-    additivity = additivity_figure(stage, out_dir / "additivity.png",
-                                   f"{system}, K_c = {k_c}: E_rerank + E_gate vs U_d(π_act)")
+        diag = diagnose(stage, cfg.tau_query)
+        tables = {
+            "distributions": pd.concat(
+                [distributions(e, judged) for e in [stage, *budgets.values()]
+                 for judged in (False, True)], ignore_index=True),
+            "diagnosis": diag,
+            "budget_outcomes": budget_outcomes(budgets),
+            "labels": label_summary(stage, cfg.tau_document),
+            "gating_failures": gating_failure_examples(stage),
+        }
+        tables["h7"] = h7(diag, tables["budget_outcomes"], n_permutations, cfg.seed)
+        for name, df in tables.items():
+            df = df.drop(columns="condensed", errors="ignore")
+            df.insert(0, "condensed", condensed)
+            parts.setdefault(name, []).append(df)
 
-    tables = {"distributions": dist, "diagnosis": diag, "budget_outcomes": outcomes,
-              "h7": tests, "labels": labels, "gating_failures": examples}
+        mode = _mode_name(condensed)
+        suffix = "_condensed" if condensed else ""
+        additivity[mode] = additivity_figure(
+            stage, out_dir / f"additivity{suffix}.png",
+            f"{system}, K_c = {k_c}, {mode}: E_rerank + E_gate vs U_d(π_act)")
+        label_counts[mode] = diag["label"].value_counts().to_dict()
+
+    tables = {name: pd.concat(dfs, ignore_index=True) for name, dfs in parts.items()}
     for name, df in tables.items():
         df.to_csv(out_dir / f"{name}.csv", index=False)
-    return {"tables": tables, "additivity": additivity,
-            "label_counts": diag["label"].value_counts().to_dict()}
+    return {"tables": tables, "additivity": additivity, "label_counts": label_counts}
 
 
 def main() -> None:
@@ -266,6 +296,7 @@ def main() -> None:
         cfg.fingerprint(), owner="shubham", extra={
             "effects_dir": str(args.effects_dir), "system": args.system, "k_c": k_c,
             "tau_query": cfg.tau_query, "tau_document": cfg.tau_document,
+            "condensed_modes": list(MODES),
             "label_counts": result["label_counts"], "additivity": result["additivity"],
             "files": sorted(p.name for p in out_dir.iterdir()),
             "seconds": round(time.perf_counter() - start, 1),

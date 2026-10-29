@@ -15,6 +15,7 @@ import pytest
 
 from experiments_shubham import analysis
 from experiments_shubham.engine import (
+    MODES,
     EffectSettings,
     QueryInputs,
     run_budget,
@@ -25,6 +26,7 @@ from experiments_shubham.engine import (
 )
 from shared import fixtures as fx
 from shared.diagnosis import QUERY_LABELS, query_delta_dcg, query_diagnosis
+from shared.schema import SchemaError
 from shared.worlds import build_t_grid, build_worlds
 
 
@@ -81,6 +83,14 @@ def test_random_policy_outcome_is_the_mean_over_seeds(small_cfg, grid):
     assert np.allclose(merged.loc[per_seed.index.astype(str)], per_seed.to_numpy())
 
 
+def test_diagnosis_refuses_a_frame_that_mixes_modes(toy_stage):
+    both = pd.concat([toy_stage, toy_stage.assign(condensed=True)], ignore_index=True)
+    with pytest.raises(SchemaError, match="mixes condensed"):
+        analysis.diagnose(both, 0.05)
+    with pytest.raises(SchemaError, match="mixes condensed"):
+        analysis.budget_outcomes({"boundary": both})
+
+
 def test_distribution_sizes_add_up(toy_stage):
     dist = analysis.distributions(toy_stage)
     assert dist["n"].sum() == len(toy_stage)
@@ -109,11 +119,16 @@ def test_run_end_to_end(small_cfg, grid, tmp_path):
                  "gating_failures"):
         assert (tmp_path / "out" / f"{name}.csv").exists()
     assert (tmp_path / "out" / "additivity.png").exists()
+    assert (tmp_path / "out" / "additivity_condensed.png").exists()
+    for df in result["tables"].values():
+        assert set(df["condensed"]) == set(MODES)
 
     h7 = result["tables"]["h7"]
     n_t = sum(t != 1.0 for t in small_cfg.t_grid)
-    assert len(h7) == len(small_cfg.outsider_policies) * n_t
+    assert len(h7) == len(MODES) * len(small_cfg.outsider_policies) * n_t
     assert (h7["n_queries"] == len(queries)).all()
-    assert set(result["label_counts"]) <= set(QUERY_LABELS)
+    assert set(result["label_counts"]) == {"uncondensed", "condensed"}
+    for counts in result["label_counts"].values():
+        assert set(counts) <= set(QUERY_LABELS)
     assert json.dumps(result["additivity"])
     assert isinstance(result["tables"]["labels"], pd.DataFrame)

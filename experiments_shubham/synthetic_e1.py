@@ -354,7 +354,9 @@ def run_variant(cfg: FrozenConfig, name: str, n_queries: int | None,
     t_grid = grid_t(cfg)
 
     recovery, stats = [], []
-    for table in iter_grid(queries, cfg, settings):
+    # Primary mode only: every synthetic label is known, so condensing removes
+    # nothing and the condensed tables would repeat these exactly.
+    for table in iter_grid(queries, cfg, settings, modes=(False,)):
         base = {"variant": name, "k_c": table.k_c, "policy": table.policy}
         if table.policy is None:
             ref = ref_stage(refs, table.k_c, k)

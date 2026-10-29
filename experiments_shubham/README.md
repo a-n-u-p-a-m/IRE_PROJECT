@@ -28,18 +28,23 @@ The index lives in the shared Drive folder `IRE_PROJECT/dpr_index_cosdpr_distil`
 | file | what it does |
 |---|---|
 | `engine.py` | world runner (A/B/C → `E_rerank`, `E_gate`) and budget runner (D → `Δ_t`) over the frozen grid, strict by default |
-| `tests/test_engine.py` | toy-fixture numbers, seed handling, refusal cases, every synthetic regime in strict mode |
+| `tests/test_engine.py` | toy-fixture numbers, seed handling, refusal cases, every synthetic regime in strict mode, condensed effects recounted from the uncondensed table |
 
 Every (query, K_c) passes `verify_isolation`, every t-grid passes
 `verify_t_baseline`, and every table passes the schema's sign invariants before
 it is written. Only the random outsider policy repeats over seeds; boundary and
 alternative run once with `seed=NA`.
 
-    python -m experiments_shubham.engine --regime weak_retriever            # ~2 min, ~2 GB
+    python -m experiments_shubham.engine --regime weak_retriever            # ~2 min per mode, ~2 GB
     python -m experiments_shubham.engine --regime strong_stages --n-queries 10
 
 Writes one effect table per K_c (stage effects) and per (K_c, policy) (budget
-effects), a summary CSV and a manifest to `effects/synthetic/<regime>/`.
+effects) in each ranking mode, a summary CSV and a manifest to
+`effects/synthetic/<regime>/`. `<table>.parquet` is the primary, uncondensed
+estimand; `<table>_condensed.parquet` is the freeze-v2 robustness check, where
+unjudged documents are dropped before ranks are assigned and rows cover judged
+documents only. Pick one mode per computation (`shared.schema.select_mode`);
+the shared readers refuse a frame holding both.
 
 ## E1 - synthetic implementation validation
 
@@ -62,7 +67,8 @@ effects), a summary CSV and a manifest to `effects/synthetic/<regime>/`.
 
 Writes `e1_report.md`, `e1_checks.csv`, `e1_stats.csv` and `e1_recovery.csv` to
 `effects/synthetic/`, and the committed record `effects/e1_manifest.json`.
-Exits non-zero if any check fails.
+Exits non-zero if any check fails. E1 runs the primary mode only: every
+synthetic document is judged, so condensing would remove nothing.
 
 ## H7 power simulation (H2: reference-subset size)
 
@@ -99,6 +105,9 @@ with label shares, headline power and both recommendations, to
 
 It reads only what `engine.run_grid` writes, so it runs unchanged on the real
 effect tables in Week 3. K_c defaults to the feasibility report's headline.
+Every step runs once per ranking mode, every output row carries `condensed`,
+and the additivity figure is drawn per mode (`additivity.png`,
+`additivity_condensed.png`).
 
     python -m experiments_shubham.engine --regime weak_retriever
     python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever --system synthetic

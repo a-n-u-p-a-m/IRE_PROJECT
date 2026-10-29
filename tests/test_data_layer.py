@@ -400,7 +400,7 @@ def _effect_row(**over):
     row = {
         "query_id": "q1", "doc_id": "d1", "stage1_system": "bm25",
         "effect_type": E_GATE, "k_c": 100, "k": 10, "utility": "dcg",
-        "budget_b": None, "t": None, "policy": None, "seed": None,
+        "condensed": False, "budget_b": None, "t": None, "policy": None, "seed": None,
         "stratum": SURVIVOR, "judged": True,
         "rank_treatment": 1, "rank_control": 3,
         "utility_treatment": 7.0, "utility_control": 3.5, "effect": 3.5,

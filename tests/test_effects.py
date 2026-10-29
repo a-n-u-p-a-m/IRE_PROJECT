@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from shared import fixtures as fx
+from shared.baselines import fit_stratum_means
 from shared.effects import (
     GATING_FAILURE,
     budget_effects_for_query,
@@ -38,8 +40,9 @@ from shared.schema import (
     SURVIVOR,
     UNSELECTED_OUTSIDER,
     SchemaError,
+    select_mode,
 )
-from shared.strata import check_strata_valid
+from shared.strata import check_strata_valid, stratum_sizes
 from shared.worlds import build_t_grid, build_worlds
 
 
@@ -279,3 +282,65 @@ def test_concat_of_nothing_is_a_typed_empty_table():
     out = concat_effects([])
     assert out.empty
     assert "effect_type" in out.columns
+
+
+# ── condensed mode ────────────────────────────────────────────────────
+
+def _toy_with_unjudged(*unjudged):
+    """The toy cascade with some documents unjudged: no label, no gain."""
+    c = fx.toy_cascade()
+    judged = {d: d not in unjudged for d in c["universe"]}
+    rel = {d: r for d, r in c["relevances"].items() if judged[d]}
+    return c, judged, rel
+
+
+def test_condensing_removes_protection_from_an_unjudged_competitor(worlds):
+    """
+    With e unjudged, e still outranks b in the no-gate world, so uncondensed
+    the gate protects b exactly as in the fixture. Condensed, e has no rank:
+    b is first in both worlds and the protection disappears, while i - kept
+    below k by e - becomes a gating failure.
+    """
+    c, judged, rel = _toy_with_unjudged("e")
+    args = (worlds, rel, judged, "toy", c["k"], c["gain_map"])
+    plain = stage_effects_for_query(*args)
+    cond = stage_effects_for_query(*args, condensed=True)
+
+    assert _pick(plain, E_GATE, "b")["effect"] == pytest.approx(3 - 3 / math.log2(3))
+    assert _pick(cond, E_GATE, "b")["effect"] == pytest.approx(0.0)
+    assert _pick(plain, E_GATE, "i")["effect"] == pytest.approx(0.0)
+    assert _pick(cond, E_GATE, "i")["effect"] == pytest.approx(-3 / math.log2(3))
+    assert "e" not in set(cond["doc_id"]) and cond["judged"].all()
+    assert not plain["condensed"].any() and cond["condensed"].all()
+    check_invariants(cond)
+
+
+def test_condensed_budget_effects_recount_ranks_without_unjudged(worlds, t_worlds):
+    """At t=0.5 the unjudged e pushes b to rank 2; condensed, b stays first."""
+    c, judged, rel = _toy_with_unjudged("e")
+    args = (worlds, t_worlds, rel, judged, "toy", c["k"], c["gain_map"])
+    plain = budget_effects_for_query(*args)
+    cond = budget_effects_for_query(*args, condensed=True)
+
+    assert _pick(plain, DELTA_T, "b", t=0.5)["effect"] == pytest.approx(
+        3 / math.log2(3) - 3)
+    assert _pick(cond, DELTA_T, "b", t=0.5)["effect"] == pytest.approx(0.0)
+    check_invariants(cond)
+
+
+def test_both_modes_of_a_row_are_distinct_keys(effects):
+    both = pd.concat([effects, effects.assign(condensed=True)], ignore_index=True)
+    check_invariants(both)
+    with pytest.raises(SchemaError, match="duplicate"):
+        check_invariants(pd.concat([effects, effects], ignore_index=True))
+
+
+def test_readers_refuse_a_frame_that_mixes_modes(effects):
+    both = pd.concat([effects, effects.assign(condensed=True)], ignore_index=True)
+    assert len(select_mode(both)) == len(effects)
+    assert not select_mode(both)["condensed"].any()
+    assert select_mode(both, condensed=True)["condensed"].all()
+    for reader in (stratum_sizes, lambda f: fit_stratum_means(f, E_GATE)):
+        with pytest.raises(SchemaError, match="mixes condensed"):
+            reader(both)
+        reader(select_mode(both))

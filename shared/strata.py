@@ -40,6 +40,7 @@ from .schema import (
     SURVIVOR,
     T_STRATA,
     UNSELECTED_OUTSIDER,
+    single_mode,
 )
 
 # Which strata carry usable magnitude information for each effect type. The
@@ -93,6 +94,7 @@ def check_strata_valid(effects: pd.DataFrame) -> None:
 
 def stratum_sizes(effects: pd.DataFrame) -> pd.DataFrame:
     """Row and query counts per (effect_type, stratum). Report this always."""
+    single_mode(effects, "stratum_sizes")
     return (
         effects.groupby(["effect_type", "stratum"], observed=True)
         .agg(

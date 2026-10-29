@@ -33,7 +33,7 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
-from .schema import DELTA_T, NON_SURVIVOR, SURVIVOR
+from .schema import DELTA_T, NON_SURVIVOR, SURVIVOR, single_mode
 from .strata import STRUCTURAL_ZERO, describe_shortcut
 
 
@@ -72,6 +72,7 @@ def fit_stratum_means(
     Structurally zero strata are pinned to exactly 0.0 rather than to their
     sample mean, which is 0.0 anyway but should not depend on the sample.
     """
+    single_mode(train, "fit_stratum_means")
     block = train[train["effect_type"] == effect_type]
     means = (
         block.groupby("stratum", observed=True)[target_column].mean().to_dict()
@@ -131,6 +132,7 @@ def baseline_report(
     """
     from .metrics import spearman
 
+    single_mode(frame, "baseline_report")
     block = frame[frame["effect_type"] == effect_type]
     if "pred_membership" not in block.columns:
         block = membership_baseline(block)
