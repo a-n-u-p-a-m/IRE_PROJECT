@@ -11,8 +11,9 @@ synthetic data before any GPU budget is committed (config `power`).
    queries instead of assuming one regime. For each query and each K_c:
    the diagnosis from worlds A/B/C at the frozen tau_query, and Delta DCG@k at
    every t < 1 and outsider policy (random: mean over seeds). Pools are drawn
-   at two universe sizes: the synthetic config's, and 8000, a realistic
-   |U_q| for the union of two top-5000 runs.
+   at two universe sizes: the synthetic config's, and the median |U_q| of the
+   frozen universe (data/universe_manifest.json; 8000, the pre-freeze
+   estimate, when that file is absent).
 2. Power of two tests, by drawing reference subsets from the pool:
      group       the proposal's test: Delta DCG of gate-sensitive vs
                  reranking-sensitive queries (shared.diagnosis.h7_test). A
@@ -27,8 +28,10 @@ synthetic data before any GPU budget is committed (config `power`).
                  Spearman correlation between G_q and Delta DCG. Proposed to
                  the team, not frozen.
 
-Recommendations at the headline K_c (the largest candidate depth) and the
-smallest t, required at every universe size:
+Recommendations at the headline K_c and the smallest t, required at every
+universe size. The headline K_c is the one the feasibility report selected
+(analysis/feasibility_manifest.json, which must carry this config's
+fingerprint), or the largest candidate depth when that report is absent:
      group       every policy reaches the target unconditional power
      continuous  boundary and alternative reach it (random is the control)
 
@@ -61,7 +64,7 @@ from shared.diagnosis import (
     query_diagnosis,
     required_reference_size,
 )
-from shared.provenance import run_manifest, write_manifest
+from shared.provenance import read_manifest, run_manifest, write_manifest
 from shared.synthetic import SyntheticParams, alternative_ranks, generate, to_lookups
 from shared.worlds import build_t_grid, build_worlds
 
@@ -69,7 +72,9 @@ logger = logging.getLogger(__name__)
 
 ALIGNMENT_RANGE = (0.45, 0.85)
 NOISE_RANGE = (0.15, 0.60)
-REALISTIC_UNIVERSE = 8000
+FALLBACK_UNIVERSE = 8000    # realistic |U_q| estimate from before the freeze
+UNIVERSE_MANIFEST = Path("data/universe_manifest.json")
+FEASIBILITY_MANIFEST = Path("analysis/feasibility_manifest.json")
 ALL_QUERIES = 97            # TREC-DL 2019 + 2020 judged queries
 
 
@@ -186,9 +191,31 @@ def _smallest(blk: pd.DataFrame, target: float) -> int | None:
     return int(ok["reference_size"].min()) if len(ok) else None
 
 
-def recommend(power: pd.DataFrame, cfg: FrozenConfig) -> dict:
+def realistic_universe(path: Path = UNIVERSE_MANIFEST) -> tuple[int, str]:
+    """(median |U_q| of the frozen universe, where it came from)."""
+    if path.exists():
+        return int(read_manifest(path)["universe_size_median"]), str(path)
+    return FALLBACK_UNIVERSE, "estimate from before the universe was frozen"
+
+
+def headline_k_c(cfg: FrozenConfig, path: Path = FEASIBILITY_MANIFEST) -> tuple[int, str]:
+    """(the headline K_c the feasibility report selected, where it came from)."""
+    if not path.exists():
+        return max(cfg.candidate_depths), "largest candidate depth"
+    rec = read_manifest(path)
+    if rec.get("config_fingerprint") != cfg.fingerprint():
+        raise ValueError(
+            f"{path} was produced under freeze {rec.get('config_fingerprint')}, not "
+            f"{cfg.fingerprint()}; results from different freezes are never combined")
+    k_c = int(rec["headline_k_c"])
+    if k_c not in cfg.candidate_depths:
+        raise ValueError(f"headline K_c={k_c} is not one of {list(cfg.candidate_depths)}")
+    return k_c, str(path)
+
+
+def recommend(power: pd.DataFrame, cfg: FrozenConfig, k_c: int | None = None) -> dict:
     """The declared rules, at the headline K_c and the smallest t."""
-    k_c, t_min = max(cfg.candidate_depths), min(cfg.t_grid)
+    k_c, t_min = k_c or max(cfg.candidate_depths), min(cfg.t_grid)
     target = cfg.power["target_power"]
     head = power[(power["k_c"] == k_c) & (power["t"] == t_min)]
     rules = {
@@ -209,9 +236,9 @@ def recommend(power: pd.DataFrame, cfg: FrozenConfig) -> dict:
     return out
 
 
-def headline_table(power: pd.DataFrame, cfg: FrozenConfig) -> dict:
+def headline_table(power: pd.DataFrame, cfg: FrozenConfig, k_c: int | None = None) -> dict:
     """Unconditional power at the headline K_c and smallest t, for the manifest."""
-    k_c, t_min = max(cfg.candidate_depths), min(cfg.t_grid)
+    k_c, t_min = k_c or max(cfg.candidate_depths), min(cfg.t_grid)
     head = power[(power["k_c"] == k_c) & (power["t"] == t_min)]
     return {
         f"{test}|{policy}|U={n_docs}": {int(r.reference_size): round(float(r.unconditional_power), 3)
@@ -229,7 +256,9 @@ def main() -> None:
     parser.add_argument("--config", default="config/base.yaml")
     parser.add_argument("--pool-size", type=int, default=1000)
     parser.add_argument("--n-docs", type=int, nargs="+", default=None,
-                        help=f"universe sizes (default: the config's and {REALISTIC_UNIVERSE})")
+                        help="universe sizes (default: the config's and the frozen median)")
+    parser.add_argument("--headline-kc", type=int, default=None,
+                        help="default: the feasibility report's choice")
     parser.add_argument("--out-dir", default=None, help="default: analysis/power")
     args = parser.parse_args()
 
@@ -237,7 +266,12 @@ def main() -> None:
     analysis_root = Path(cfg.paths.get("analysis", "analysis"))
     out_dir = Path(args.out_dir) if args.out_dir else analysis_root / "power"
     out_dir.mkdir(parents=True, exist_ok=True)
-    universes = args.n_docs or [cfg.synthetic["n_docs_per_query"], REALISTIC_UNIVERSE]
+    realistic, realistic_source = realistic_universe()
+    universes = args.n_docs or [cfg.synthetic["n_docs_per_query"], realistic]
+    if args.headline_kc:
+        k_c, k_c_source = args.headline_kc, "command line"
+    else:
+        k_c, k_c_source = headline_k_c(cfg)
     sizes = sorted(set(cfg.power["candidate_sizes"]) | {ALL_QUERIES})
 
     start = time.perf_counter()
@@ -247,7 +281,7 @@ def main() -> None:
     power = pd.concat([group_power(pool, cfg, sizes), correlation_power(pool, cfg, sizes)],
                       ignore_index=True)
     power.to_csv(out_dir / "h7_power.csv", index=False)
-    rec = recommend(power, cfg)
+    rec = recommend(power, cfg, k_c)
 
     labels = (pool.drop_duplicates(["n_docs", "query", "k_c"])
               .groupby(["n_docs", "k_c"])["label"].value_counts(normalize=True)
@@ -255,11 +289,13 @@ def main() -> None:
     manifest = run_manifest(cfg.fingerprint(), owner="shubham", extra={
         "experiment": "H7 power simulation (H2)", "pool_size": args.pool_size,
         "universe_sizes": universes, "reference_sizes": sizes,
+        "realistic_universe": {"value": realistic, "source": realistic_source},
+        "headline_k_c": {"value": k_c, "source": k_c_source},
         "alignment_range": ALIGNMENT_RANGE, "noise_range": NOISE_RANGE,
         "tau_query": cfg.tau_query, "power": cfg.power,
         "label_shares": {f"U={n}|K_c={k}": row for (n, k), row
                          in labels.to_dict("index").items()},
-        "headline_power": headline_table(power, cfg),
+        "headline_power": headline_table(power, cfg, k_c),
         "recommendation": rec, "seconds": round(time.perf_counter() - start, 1),
     })
     manifest_path = ((analysis_root if args.out_dir is None else out_dir)

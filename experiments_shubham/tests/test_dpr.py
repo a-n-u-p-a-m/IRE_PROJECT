@@ -15,9 +15,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from experiments_shubham import run_dpr
-from experiments_shubham.dpr import LocalShards, encode_corpus, exact_search
-from shared.schema import validate_run
+try:
+    import torch  # noqa: F401
+except ImportError:
+    pytest.skip("exact search runs on torch", allow_module_level=True)
+
+from experiments_shubham import run_dpr  # noqa: E402
+from experiments_shubham.dpr import LocalShards, encode_corpus, exact_search  # noqa: E402
+from shared.schema import validate_run  # noqa: E402
 
 
 class FakeEncoder:

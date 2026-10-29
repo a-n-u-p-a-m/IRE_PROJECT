@@ -71,8 +71,10 @@ Exits non-zero if any check fails.
 | `power_h7.py` | synthetic query pool → diagnosis label, G_q and Δ DCG per (K_c, policy, t) → power of the H7 test per reference size |
 | `tests/test_power_h7.py` | pool shape and reproducibility, both tests' recommendations, untestable subsets counted as misses |
 
-Two tests of H7, at universe sizes 2000 (synthetic config) and 8000 (realistic
-|U_q|), reference sizes from `config.power` plus all 97 queries:
+Two tests of H7, at universe sizes 2000 (synthetic config) and the frozen
+universe's median |U_q| (from `data/universe_manifest.json`), reference sizes
+from `config.power` plus all 97 queries, recommended at the headline K_c from
+`analysis/feasibility_manifest.json`:
 
 - **group** (the proposal's): gate-sensitive vs reranking-sensitive Δ DCG.
   `unconditional_power` counts a subset with fewer than two queries in a group
@@ -87,3 +89,16 @@ Two tests of H7, at universe sizes 2000 (synthetic config) and 8000 (realistic
 Writes the pool and power tables to `analysis/power/` and the committed record,
 with label shares, headline power and both recommendations, to
 `analysis/h7_power_manifest.json`.
+
+## Effect analysis and H7 (Week 2)
+
+| file | what it does |
+|---|---|
+| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, and H7 (group and continuous tests) per policy and t |
+| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; end-to-end run on a small grid |
+
+It reads only what `engine.run_grid` writes, so it runs unchanged on the real
+effect tables in Week 3. K_c defaults to the feasibility report's headline.
+
+    python -m experiments_shubham.engine --regime weak_retriever
+    python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever --system synthetic
