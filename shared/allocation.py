@@ -169,12 +169,25 @@ def validate_allocation(
     B". A short allocation would make one point of the t curve cheaper than
     the others, which silently turns a budget comparison into a compute
     comparison.
+
+    The expectation is capped by what was AVAILABLE, not by what was taken.
+    An earlier version compared against `min(n_out, len(selected))`, which made
+    the check vacuous in exactly the case it exists for: a short allocation
+    always matches its own shortfall, so it passed. This accepted
+
+        retained=[a] removed=[b] selected=[] unselected=[c,d] submitted=[a]
+
+    at B=2, t=0.5, although one outsider was available and was not taken. The
+    legitimate shortfall the cap is for is an exhausted pool - `select_outsiders`
+    returns the whole discarded set when the budget asks for more than it holds
+    - so the ceiling is |D_q|, which is `selected` plus `unselected`. Likewise
+    |C_q| is `retained` plus `removed`.
     """
     submitted = list(alloc["submitted"])
     n_cand, n_out = split_budget(total_budget, t)
-    expected = min(n_cand, len(alloc["retained"])) + min(
-        n_out, len(alloc["selected"])
-    )
+    n_candidates = len(alloc["retained"]) + len(alloc["removed"])
+    n_discarded = len(alloc["selected"]) + len(alloc["unselected"])
+    expected = min(n_cand, n_candidates) + min(n_out, n_discarded)
 
     if len(submitted) != expected:
         raise AllocationError(

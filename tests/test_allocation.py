@@ -177,3 +177,45 @@ def test_validate_catches_an_allocation_that_double_counts():
     }
     with pytest.raises(AllocationError):
         validate_allocation(alloc, 2, 0.5)
+
+
+def test_a_short_allocation_is_caught_when_the_pool_was_not_exhausted():
+    """
+    The regression guard for a check that used to be vacuous.
+
+    `validate_allocation` capped the expectation at `min(n_out, len(selected))`
+    - the amount TAKEN - so a short allocation always matched its own shortfall
+    and passed. Here one outsider was available in D_q and was not taken, which
+    makes this t point cheaper than the others and turns the budget comparison
+    into a compute comparison.
+    """
+    short = {
+        "retained": ["a"], "removed": ["b"],
+        "selected": [], "unselected": ["c", "d"],
+        "submitted": ["a"],
+    }
+    with pytest.raises(AllocationError, match="should submit 2"):
+        validate_allocation(short, 2, 0.5)
+
+
+def test_an_exhausted_discarded_pool_is_still_accepted():
+    """
+    The legitimate shortfall the cap exists for. D_q holds one document and the
+    budget asks for one outsider, so taking all of it spends everything
+    available - that is not a short allocation.
+    """
+    ok = {
+        "retained": ["a"], "removed": ["b"],
+        "selected": ["c"], "unselected": [],
+        "submitted": ["a", "c"],
+    }
+    validate_allocation(ok, 2, 0.5)
+
+
+def test_an_exhausted_candidate_pool_is_still_accepted():
+    ok = {
+        "retained": ["a"], "removed": [],
+        "selected": ["c"], "unselected": ["d"],
+        "submitted": ["a", "c"],
+    }
+    validate_allocation(ok, 2, 0.5)

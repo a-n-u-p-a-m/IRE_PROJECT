@@ -28,9 +28,13 @@ So this does not compute effects. It publishes the allocations and checks them:
     would differ from the treatments in cost as well as in selection, and the
     comparison would not isolate the policy.
 
-Deliberately NOT done here: sampling or approximating. Every allocation is
-built by `shared.allocation.allocate` and checked by `validate_allocation`, so
-the audit exercises the production path rather than a reimplementation of it.
+Deliberately NOT done here: sampling, approximating, or reimplementing. Every
+allocation is built by `shared.allocation.allocate` and checked by
+`validate_allocation`, so the audit exercises the production path rather than a
+parallel copy of it. Writing this audit is what surfaced that
+`validate_allocation` could not catch a short allocation at all - it compared
+against the amount achieved rather than the amount available - which is fixed
+in shared/ as of this change.
 
 Outputs: the promoted outsiders per allocation (the interesting part - what
 each policy actually chooses), a per-allocation audit row, and a manifest.
@@ -111,30 +115,6 @@ def audit_one(
         validate_allocation(alloc, budget, t)
     except AllocationError as exc:
         problems.append(f"spend: {exc}")
-
-    # The spend check is repeated here rather than delegated, because
-    # `shared.validate_allocation` cannot catch the failure its own docstring
-    # describes. It compares against `min(n_out, len(selected))` - the amount
-    # ACHIEVED - so a short allocation always matches its own shortfall and the
-    # check passes. The achievable ceiling is |D_q|, not |selected|:
-    #
-    #     validate_allocation({"retained": ["a"], "removed": ["b"],
-    #                          "selected": [], "unselected": ["c", "d"],
-    #                          "submitted": ["a"]}, 2, 0.5)   -> accepted,
-    #
-    # although one outsider was available and not taken. Reported for a fix in
-    # shared/; until it lands this is the check that actually holds.
-    n_cand_want, n_out_want = split_budget(budget, t)
-    n_candidates = len(alloc["retained"]) + len(alloc["removed"])
-    n_discarded = len(alloc["selected"]) + len(alloc["unselected"])
-    achievable = min(n_cand_want, n_candidates) + min(n_out_want, n_discarded)
-    if len(alloc["submitted"]) != achievable:
-        problems.append(
-            f"spend: submitted {len(alloc['submitted'])} of an achievable "
-            f"{achievable} at t={t}, B={budget} (|C_q|={n_candidates}, "
-            f"|D_q|={n_discarded}). A short allocation makes this point of the "
-            "t curve cheaper than the others."
-        )
 
     strata = ("retained", "removed", "selected", "unselected")
     sizes = {k: len(alloc[k]) for k in strata}
