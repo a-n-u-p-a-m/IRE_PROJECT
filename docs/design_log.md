@@ -40,21 +40,27 @@ Decide the *value* now:
 
 | decision | value | note |
 |---|---|---|
-| `tau_document` | | presentation labels only |
-| B = `K_c`? | | if no, `t=1` is a candidate-only baseline and every budget result must say so |
-| headline NDCG gain map | | official TREC gains, or the attribution map; if they differ, both get reported |
+| `tau_document` | **0.05** | presentation labels only; already frozen in `config/base.yaml` |
+| B = `K_c`? | **yes** (`b_equals_kc: true`) | so `t=1` reproduces the conventional cascade exactly, and budget results need no candidate-only caveat |
+| headline NDCG gain map | **both, labelled** | trec_eval's linear gains for any number compared to published work; the attribution map for every estimand. See 2026-10-28. |
 | listwise reranker | out of scope | |
+
+These three were **already binding before they were recorded**: the values live
+in the frozen config and its fingerprint `46d0807d8ed3` is baked into the
+frozen universe. Recording them ratifies what the fingerprint already enforces.
+Changing any of them now means a new fingerprint and a universe rebuild —
+cheap today, and not cheap once the Stage-2 cache is filled.
 
 Decide the *rule* now, the value arrives later:
 
-| decision | rule | value from |
+| decision | rule | value |
 |---|---|---|
-| headline `K_c` | | Week-2 judged-non-survivor counts |
-| `tau_query` | fixed on synthetic, then never tuned | Shubham, end of Week 1 |
-| reference-subset size | whatever the power simulation returns | Shubham, end of Week 1 (H2) |
-| reference sampling strategy | | |
-| SPLADE in/out | | end of Week 2, after the Jaccard check |
-| hashing in/out | Chaitanya's written go/no-go criteria | Week 2 |
+| headline `K_c` | greatest gate-failure supply among non-degenerate depths | **100** (2026-10-28 feasibility report) |
+| `tau_query` | fixed on synthetic, then never tuned | **0.05**, frozen in config |
+| reference-subset size | whatever the power simulation returns | **all 97 queries** (Shubham, H2) |
+| reference sampling strategy | moot — every query is a reference query | — |
+| SPLADE in/out | **out** | a third Stage-1 system would require rebuilding the frozen universe, and the Jaccard check (0.11–0.16) already shows the two systems give ample leverage |
+| hashing in/out | Chaitanya's written criteria | **out** unless he reports all four met; `hashing.enabled: false` |
 
 **Also to settle at that meeting**
 
@@ -274,6 +280,98 @@ top-10, available as soon as any Stage-2 scores exist. Decision: ____
 **Report output grouped by finding kind.** It was emitting one message per
 (`K_c`, system) — twelve lines for two distinct problems. Now one entry per kind
 listing everywhere it fires.
+
+---
+
+## 2026-10-29 — Throughput, H2 resolved, and the decisions that must precede the cache fill
+
+Chaitanya's PR #3 and Shubham's Week-2 branch both landed as proposals. Three
+things are now settled, two are newly urgent, and one is a defect.
+
+**Throughput: 535 pairs/sec on a Colab T4 → ~27 min for the whole universe.**
+The full 872,455 pairs is affordable, and with the 3-way shard plan it is ~9
+minutes each. Two caveats on the number rather than the conclusion:
+
+- It was measured at **`float32`** with **MiniLM-L-12-v2** (`FROZEN_PRECISION`
+  in `throughput.py`). The reranker already supports `float16`, and a T4's
+  half-precision path would roughly double this. **This is the newly urgent
+  decision**, because precision changes the scores, which changes the config
+  fingerprint, which invalidates the cache. It has to be settled *before* the
+  fill, not after. Decision: ____
+- The mean sequence length (71 tokens, max 183) is a `words × 1.3` estimate,
+  not real tokenisation. It does not threaten the conclusion — even a 2×
+  error leaves us far below `max_length=512` — but it does not answer the
+  question this log asked on 2026-10-26 either: whether the cross-encoder pads
+  to the longest sequence in each batch or to 512. That is a ~2.8× factor on
+  the bill. `sentence-transformers`' `CrossEncoder` pads to longest-in-batch by
+  default, so it is probably fine; the report should log the actual padded
+  tensor width per batch and settle it.
+
+**Shuffle-invariance passed on the real reranker.** The cross-encoder is
+pointwise and batch-order invariant. This is the assumption the whole `E_gate`
+derivation rests on, and it is now verified rather than assumed.
+
+**H2 is resolved, and the reference-subset design is retired.** Shubham re-ran
+the power simulation at `K_c=100` with the real median `|U_q|` of 9,097: **no
+subset smaller than all 97 queries reaches 0.80 power**, and even at 97 only
+the *alternative* outsider policy clears it (0.935 continuous / 0.875 group).
+Boundary falls short (0.67 / 0.41).
+
+So: the reference subset is every query, which is exactly what the 27-minute
+figure makes affordable, and the sampling-strategy decision disappears.
+**H7 is confirmatory for the alternative policy and descriptive for boundary**,
+declared now rather than after the effects are seen. This is the outcome the
+2026-10-27 entry anticipated when the power denominator was corrected.
+
+**Cache seeding from the old DPR → MiniLM scores is dropped.** Shubham has
+removed it from his Week-2 scope, per the 2026-10-26 note: it saved ~97,000
+pairs of a 872,455-pair bill — about three minutes at the measured
+throughput — and in exchange interleaved two scoring runs everywhere except
+DPR's own candidate sets. At three minutes the trade was never close. The
+ROADMAP Week-2 row that still assigned it to Shubham has been corrected.
+
+**Defect in PR #3: the predictors read world-C scores and count them free.**
+`features.py:352` builds `doc_ids_per_query` from the whole top-5,000 run
+rather than from `rank <= k_c`, so `extract_stage2_features` pulls Stage-2
+scores for every universe document while its docstring states "Scores come
+from world A (the factual run)" and "Extra Stage-2 calls = 0".
+
+Those cannot both hold. For a document outside `C_q` a cached Stage-2 score
+exists *only because world C was computed*, and world C is the expensive
+counterfactual the predictors exist to avoid. The consequence is stronger than
+mis-stated cost. For a non-survivor `d`, `rank_{π_act}(d)` is undefined, so
+
+    e_gate(d) = U_d(π_act) − U_d(π_no1) = −U_d(π_no1)
+
+and `U_d(π_no1)` is fixed by `rank_C(d)`, which the `s2` scores over `U_q`
+determine exactly. Given those scores and `d`'s label, `e_gate(d)` is not
+approximately recoverable — it is **determined**. A predictor with this feature
+is not predicting the effect, it is reading it.
+
+The fix is one line (restrict to `rank <= k_c`), but every synthetic fidelity
+number in the PR has to be regenerated afterwards, and the three baselines will
+move. Note the 25 tests pass either way: the suite covers survivor flags in
+`extract_stage1_features` and never asserts the `C_q` boundary for Stage-2
+features, which is why this survived review-by-test.
+
+**Smaller items in PR #3**, recorded so they are not relitigated:
+`IrDatasetsPassageFetcher` materialises all ~8.8M MS MARCO passages (~3–4 GB)
+when the universe needs perhaps 600–800k of them (~320 MB) via
+`docs_store().get_many()`; its `cache_size` parameter is documented, assigned
+and never read. `run_real_benchmark` requires `data/universe.parquet`, which is
+deliberately not committed — the universe is rebuilt from the committed run
+tables, verified bit-identical, rather than passed between machines.
+
+**One correction to a proposed change.** The `--ignore` for
+`test_dpr.py` in the Makefile cannot be removed yet: the lazy `torch` import is
+on `shubham/week2`, not on `main`. Removing it before that branch merges breaks
+`make test-all` on every CPU-only machine. The Makefile now says so, with the
+condition for removing it.
+
+**Still open, and all three gate the cache fill:** the `float16` decision above,
+the unjudged-competitor question from 2026-10-28, and the PR #3 leakage fix.
+The first two change the config fingerprint. There is no cheaper moment than
+now.
 
 ---
 

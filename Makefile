@@ -18,6 +18,13 @@ test:
 
 # experiments_shubham/tests/test_dpr.py needs torch, which the CPU-only
 # environments do not have; it is skipped here rather than failing collection.
+#
+# REMOVE THIS --ignore once `shubham/week2` is merged, and not before. That
+# branch moves dpr.py's `import torch` inside the functions that need it, so
+# the module becomes importable and the test skips itself. On `main` the import
+# is still at module top level (dpr.py:40), so dropping the flag now breaks
+# `make test-all` on every machine without torch. Check with:
+#     git show origin/main:experiments_shubham/dpr.py | grep -n '^import torch'
 test-all:
 	$(PYTHON) -m pytest tests experiments_anupam experiments_shubham \
 		--ignore=experiments_shubham/tests/test_dpr.py

@@ -110,7 +110,7 @@ reference size proposed · cache filler works on synthetic.
 | Anupam | Shubham | Chaitanya |
 |---|---|---|
 | The universe chain above, plus Stage-1 scores over `U_q` (unretrieved documents get a floor below the observed minimum, recorded in the manifest) | Additivity demonstration figure; document labels and synthetic gating-failure examples | Passage-length check, **real throughput**, and the **shuffle-invariance test on the real reranker** (the whole `E_gate` derivation depends on it) |
-| Freeze v2 after the decision meeting | Seed the cache with the existing DPR → MiniLM scores for DPR's top-1,000, after re-scoring a 1,000-pair sample to confirm they match | Predictors (fit on training queries only; three targets kept separate), stratified metrics with all three baselines, cost-fidelity harness that converges to the exact reference at full budget, synthetic fidelity table |
+| Freeze v2 after the decision meeting | Re-record the H7 power manifest at the headline `K_c` with the real `|U_q|`, and declare which outsider policies H7 can be confirmatory for | Predictors (fit on training queries only; three targets kept separate), stratified metrics with all three baselines, cost-fidelity harness that converges to the exact reference at full budget, synthetic fidelity table |
 | | Write the analysis scripts (distributions, diagnosis, H7) against synthetic effect tables | After H3: real passage fetcher, exact required document set and call count, **shard plan (H4)** |
 
 **Checkpoint:** frozen universe, reference subset and allocations published ·
