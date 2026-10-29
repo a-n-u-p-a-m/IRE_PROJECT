@@ -6,8 +6,11 @@ test_power_h7.py - The pool simulator and the size recommendation.
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from experiments_shubham import power_h7
 from shared.diagnosis import GATE_SENSITIVE, QUERY_LABELS, RERANK_SENSITIVE
@@ -83,3 +86,24 @@ def test_untestable_subsets_count_as_misses(small_cfg):
         table["unconditional_power"] <= table["power_given_testable"].fillna(1.0)
     ).all()
     assert (table["unconditional_power"] < 0.2).all()
+
+
+def test_headline_k_c_comes_from_the_feasibility_report(small_cfg, tmp_path):
+    report = tmp_path / "feasibility_manifest.json"
+    assert power_h7.headline_k_c(small_cfg, report)[0] == max(small_cfg.candidate_depths)
+
+    report.write_text(json.dumps({"config_fingerprint": small_cfg.fingerprint(),
+                                  "headline_k_c": 20}))
+    assert power_h7.headline_k_c(small_cfg, report) == (20, str(report))
+
+    report.write_text(json.dumps({"config_fingerprint": "000000000000",
+                                  "headline_k_c": 20}))
+    with pytest.raises(ValueError, match="different freezes"):
+        power_h7.headline_k_c(small_cfg, report)
+
+
+def test_realistic_universe_comes_from_the_frozen_universe(tmp_path):
+    record = tmp_path / "universe_manifest.json"
+    assert power_h7.realistic_universe(record)[0] == power_h7.FALLBACK_UNIVERSE
+    record.write_text(json.dumps({"universe_size_median": 9097}))
+    assert power_h7.realistic_universe(record) == (9097, str(record))
