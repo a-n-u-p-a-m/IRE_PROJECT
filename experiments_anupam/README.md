@@ -18,18 +18,21 @@ file schemas in `shared/schema.py`.
 | `verify_bm25.py` | Reproduces published BM25 effectiveness, or refuses |
 | `feasibility_report.py` | The Week-2 gate: leverage, judgment density, gate-failure supply |
 | `stage1_over_universe.py` | Extends each Stage-1 run to all of `U_q` under the floor policy, for outsider selection |
+| `reference_subset.py` | Publishes which queries get full no-gate scoring, from the H7 power result |
+| `allocations.py` | Publishes the t-allocations and audits spend, partition, `t=1` and the random control |
 
-Still to come (Weeks 3–4): the outsider-allocation runner and the
-reproducibility pack. The reference-subset sampler is no longer needed — the
-power simulation returned all 97 queries, so there is nothing to sample.
+Still to come (Week 4): the reproducibility pack. The reference-subset
+*sampler* is not needed — the power simulation returned all 97 queries, so
+there is nothing to sample, and `reference_subset.py` refuses to sample
+implicitly if a future power result ever allows a smaller set.
 
 ## Running it
 
-    make test-all            # 385 tests: shared, Shubham's, mine
+    make test-all            # 404 tests: shared, Shubham's, mine
     make smoke-week1         # the whole chain, no Pyserini, ~5s
     make verify-bm25         # BM25 against the published figures
     make feasibility         # the Week-2 gate
-    python -m pytest experiments_anupam     # mine alone, 126 tests
+    python -m pytest experiments_anupam     # mine alone, 145 tests
 
 `smoke_pipeline.py` is the one to run after any change to a shared file. The
 unit suites prove each module correct; the smoke run proves they **compose** —
@@ -54,6 +57,8 @@ not in CI:
     python -m experiments_anupam.build_universe --qrels data/qrels.parquet
     python -m experiments_anupam.feasibility_report
     python -m experiments_anupam.stage1_over_universe
+    python -m experiments_anupam.reference_subset
+    python -m experiments_anupam.allocations
 
 Order matters. `build_universe` requires **every** configured universe source
 to be present, because adding a source afterwards means regenerating `U_q` and
