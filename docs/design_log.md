@@ -70,11 +70,22 @@ Decide the *rule* now, the value arrives later:
   sets. BM25's `C_q` partially overlaps DPR's top-1,000, world C mixes by
   definition, and world D's outsiders mix. A BM25-vs-DPR comparison where one
   system's candidates come from a single run and the other's from a blend is
-  exactly the asymmetry H3 cannot absorb. Decision: ____
+  exactly the asymmetry H3 cannot absorb.
+  **Decision (freeze v2): dropped.** At the measured 535 pairs/sec it saves
+  about three minutes of a 27-minute bill. Shubham removed it from his Week-2
+  scope and the ROADMAP row was corrected.
 - Throughput measurement must report the **observed mean sequence length**
   beside pairs/sec. If the cross-encoder pads to `max_length` 512 rather than to
   the longest in batch, the bill is several times larger than it needs to be —
-  MS MARCO passages average around 55 words. Decision: ____
+  MS MARCO passages average around 55 words.
+  **Decision (freeze v2): partly settled, one question left.** Measured mean
+  71 tokens, max 183 — far inside `max_length=512`, and robust even to a 2x
+  error in the `words x 1.3` estimate behind it. What is still unanswered is
+  whether the tokeniser pads to the longest sequence in each batch or to 512,
+  which is a ~2.8x factor on the bill. `sentence-transformers`' `CrossEncoder`
+  pads to longest-in-batch by default, so this is probably already fine;
+  Chaitanya to log the actual padded tensor width per batch and close it. Not
+  a blocker: it affects how long the fill takes, not what it produces.
 
 ---
 
@@ -154,7 +165,11 @@ judgments than the tail. Unjudged documents earn 0 gain, so
 `E_gate = U(π_act) − U(π_no1)` can come out large and positive because world C's
 top-10 is full of zeros rather than because gating helped. A mitigation must be
 stated before Stage-2 scoring — restrict the utility to judged documents, or
-report both and show the conclusion survives either way. Decision: ____
+report both and show the conclusion survives either way.
+**Decision (freeze v2): compute both, always.** See the freeze v2 entry for
+the reasoning; in short, condensing is a ranking transform over the same
+scores, so it costs no Stage-2 calls, and the measurement that would settle
+which mode is right does not exist until the cache is filled.
 
 **A second, worse asymmetry.** The same pooling history means BM25's candidate
 set is likely judged more densely than DPR's: lexical runs contributed to the
@@ -162,7 +177,13 @@ set is likely judged more densely than DPR's: lexical runs contributed to the
 the two paradigms would then compare judgment coverage as much as retrieval
 paradigm. `feasibility_report.py` measures this between-system ratio and warns
 above 3×. If it fires, the headline cross-paradigm claim needs rework.
-Decision: ____
+**Decision (freeze v2): retired — it does not fire.** Measured 1.06x at
+`K_c=100` (BM25 `C_q` 51% judged, DPR 48%) and 1.15x at `K_c=1000`. The
+TREC-DL 2019/2020 pools included neural runs, so they are not lexically
+biased. The floor is symmetric too: both systems retrieved exactly 5,000, so
+each floors `|U_q| - 5000` and the floored fraction is identical at 0.450.
+The cross-paradigm comparison is unconfounded on both axes that could have
+spoiled it.
 
 **`shared/qrels.py` and the gain map disagree about "relevant".** Lines 135 and
 174 count `relevance > 0`, which includes TREC-DL grade 1; the frozen gain map
@@ -275,7 +296,9 @@ Recommendation: (2), because it preserves the primary estimand while bounding
 the artefact. **Whichever is chosen carries a config fingerprint**, and the
 cheapest moment to change the config is now — before the cache exists. One
 measurement settles how much it matters: the judged fraction of world C's
-top-10, available as soon as any Stage-2 scores exist. Decision: ____
+top-10, available as soon as any Stage-2 scores exist.
+**Decision (freeze v2): option (2), compute both modes always.** And it needs
+no config field after all — see the freeze v2 entry.
 
 **Report output grouped by finding kind.** It was emitting one message per
 (`K_c`, system) — twelve lines for two distinct problems. Now one entry per kind
@@ -297,7 +320,10 @@ minutes each. Two caveats on the number rather than the conclusion:
   half-precision path would roughly double this. **This is the newly urgent
   decision**, because precision changes the scores, which changes the config
   fingerprint, which invalidates the cache. It has to be settled *before* the
-  fill, not after. Decision: ____
+  fill, not after.
+  **Decision (freeze v2): stay `float32`.** No config change. See the freeze
+  v2 entry for the arithmetic; the saving is 14 minutes once, against an
+  unquantified risk of rank flips in a rank-based estimand.
 - The mean sequence length (71 tokens, max 183) is a `words × 1.3` estimate,
   not real tokenisation. It does not threaten the conclusion — even a 2×
   error leaves us far below `max_length=512` — but it does not answer the
@@ -372,6 +398,122 @@ condition for removing it.
 the unjudged-competitor question from 2026-10-28, and the PR #3 leakage fix.
 The first two change the config fingerprint. There is no cheaper moment than
 now.
+
+---
+
+## 2026-10-29 — Freeze v2
+
+**Fingerprint: `46d0807d8ed3` — unchanged. Freeze v2 is identical to freeze
+v1.** Every open decision resolved either to keep the current value or to
+something that does not belong in the config at all. Nothing downstream needs
+re-stamping: the frozen universe, its sidecar, and every manifest written
+against v1 remain valid.
+
+That is the headline, because the two live decisions both looked like config
+changes and neither turned out to be one.
+
+### Precision: stay `float32`
+
+`reranker_precision: float32` is unchanged.
+
+The case for `float16` was speed: 535 pairs/sec becomes roughly 1,100 on a T4,
+so the 872,455-pair fill drops from ~27 minutes to ~13. **That saving is 14
+minutes, once, for the entire project.**
+
+Against it: every estimand here is a *difference* of rank-based utilities.
+`float16` perturbs scores at ~1e-3, and in a 9,000-document ranking that will
+flip near-ties. How many, and whether the flips land where they matter, is
+unquantified — and quantifying it costs a GPU session that would itself take
+longer than the 14 minutes being saved.
+
+So the decision needs no further evidence: the cost side is already measured
+and it is negligible. Trading an unquantified risk to the estimands for a
+quarter of an hour is not a trade worth making. Revisit only if the bill grows
+by an order of magnitude.
+
+A consequence for Chaitanya: `throughput.py` hardcodes `FROZEN_MODEL`,
+`FROZEN_MAX_LENGTH`, `FROZEN_BATCH_SIZE` and `FROZEN_PRECISION` as module
+constants duplicating `cfg.reranker_*`. They agree today. They should read from
+the config, or a future precision change will leave the throughput report
+describing a precision the project is not using.
+
+### Unjudged competitors: compute both modes, always
+
+The open question was whether to keep the primary rule — *unjudged documents
+occupy ranks as competitors, because the policy being simulated really would
+have ranked them* — given that `U_q` is 1.65% judged while `C_q` is 6–29%
+judged, which risks driving `E_gate` towards `DCG(π_act)` as an artefact of
+2019 pooling.
+
+**Decision: compute every effect both ways and report both.** Three reasons,
+in order of weight.
+
+**It costs no GPU.** Condensing is a transform on *rankings*, not on scores:
+drop unjudged documents before ranks are assigned. Same cache, same
+872,455 calls. The second mode is CPU only. A robustness check that costs
+nothing should not be argued about.
+
+**It is the only option that does not decide in the dark.** The measurement
+that would settle which mode is right — the judged fraction of world C's
+top-10 — does not exist until the cache is filled. Every other option commits
+now to a choice whose evidence arrives later. This one defers the choice to
+when the evidence exists, which is what the pre-registration discipline is
+actually for: fixing the *procedure* in advance, not guessing the answer.
+
+**It needs no config field, so the fingerprint does not move.** This is the
+part worth noticing. If "which mode is headline" were a config value, freeze v2
+would change the fingerprint and invalidate the frozen universe. But if *both*
+are always computed, there is no choice to encode. The config governs what is
+computed; the design log governs what is presented. The cost is a `condensed`
+column on the effect table — a schema change in Shubham's area, not a config
+one — and **that is the one piece of this decision that needs his agreement.**
+
+Headline presentation, declared now: the **primary** estimand is the
+uncondensed one, because it is what the deployed policy would really do. The
+condensed figure is reported beside it as the robustness check. If the two
+disagree in sign or in which stratum dominates, that disagreement *is* the
+finding and gets its own paragraph rather than a footnote.
+
+### Everything else resolved
+
+- **Cache seeding from the old DPR → MiniLM scores: dropped.** ~3 minutes of a
+  27-minute bill, in exchange for interleaving two scoring runs everywhere
+  except DPR's own candidate sets.
+- **Between-system judgment asymmetry: retired.** Measured 1.06×, not the 3×+
+  that would have confounded the cross-paradigm claim. The floor is symmetric
+  too — both systems floor exactly `|U_q| − 5000`, an identical 0.450.
+- **Headline `K_c` = 100**, by greatest gate-failure supply among
+  non-degenerate depths. 500 and 1000 are the realism ladder.
+- **Reference subset = all 97 queries.** H7 is **confirmatory for the
+  `alternative` policy only** and **descriptive for `boundary`**; `random` is
+  the control and is not expected to reach power. Recorded in
+  `data/reference_subset_manifest.json`, derived mechanically from Shubham's
+  power manifest rather than from a chat message.
+- **SPLADE: out.** A third Stage-1 system would require rebuilding the frozen
+  universe, and the candidate Jaccard (0.11–0.16) already gives ample leverage.
+- **Hashing: out**, `hashing.enabled: false`, per Chaitanya's own written
+  criteria.
+- **Sequence-length padding:** one narrow question left with Chaitanya — log
+  the actual padded tensor width per batch. It affects how long the fill takes,
+  not what it produces, so it is not a blocker.
+
+### State at freeze v2
+
+| | |
+|---|---|
+| Fingerprint | `46d0807d8ed3` (unchanged from v1) |
+| Queries | 97, split 49/19/29 by query, seed 42 |
+| BM25 | verified exact against published figures, delta 0.0000 on all four |
+| Universe | `\|U_q\|` 7,045–9,986, median 9,097, **872,455 pairs**; reproduced bit-identical in three environments across two OSes |
+| Stage-1 over `U_q` | floored fraction 0.450, identical for both systems |
+| Reference subset | all 97 queries |
+| Allocations | 11,640 audited; spend, partition, `t=1` baseline and random-control sensitivity all hold |
+| Stage-2 bill | 872,455 unique pairs, ~27 min on one T4 |
+| Tests | 406 passing, 1 skipped |
+
+**Open, and owned by others:** Chaitanya's feature-leakage fix and the padded
+width; Shubham's agreement on the `condensed` column. Nothing blocks the cache
+fill once the leakage fix lands.
 
 ---
 
