@@ -17,17 +17,19 @@ file schemas in `shared/schema.py`.
 | `smoke_pipeline.py` | Drives the whole chain end to end with no retriever |
 | `verify_bm25.py` | Reproduces published BM25 effectiveness, or refuses |
 | `feasibility_report.py` | The Week-2 gate: leverage, judgment density, gate-failure supply |
+| `stage1_over_universe.py` | Extends each Stage-1 run to all of `U_q` under the floor policy, for outsider selection |
 
-Still to come (Weeks 2–4): the reference-subset sampler runner, the
-outsider-allocation runner and the reproducibility pack.
+Still to come (Weeks 3–4): the outsider-allocation runner and the
+reproducibility pack. The reference-subset sampler is no longer needed — the
+power simulation returned all 97 queries, so there is nothing to sample.
 
 ## Running it
 
-    make test-all            # 355 tests: shared, Shubham's, mine
+    make test-all            # 385 tests: shared, Shubham's, mine
     make smoke-week1         # the whole chain, no Pyserini, ~5s
     make verify-bm25         # BM25 against the published figures
     make feasibility         # the Week-2 gate
-    python -m pytest experiments_anupam     # mine alone, 106 tests
+    python -m pytest experiments_anupam     # mine alone, 126 tests
 
 `smoke_pipeline.py` is the one to run after any change to a shared file. The
 unit suites prove each module correct; the smoke run proves they **compose** —
@@ -51,6 +53,7 @@ not in CI:
     # once Shubham's runs/dpr.parquet has landed (H1):
     python -m experiments_anupam.build_universe --qrels data/qrels.parquet
     python -m experiments_anupam.feasibility_report
+    python -m experiments_anupam.stage1_over_universe
 
 Order matters. `build_universe` requires **every** configured universe source
 to be present, because adding a source afterwards means regenerating `U_q` and
