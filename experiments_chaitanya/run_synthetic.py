@@ -172,21 +172,26 @@ def run_synthetic_pipeline(
     s1_feats = extract_stage1_features(run_df, "bm25", k_c)
 
     # Simulate stage2 features from synthetic s2 scores (no cache needed)
+    # Stage-2 features are RESTRICTED to C_q survivors (rank <= k_c under s1)
     s2_rows = []
     for qid in valid_qids:
-        doc_scores = s2[qid]
+        s1_scores = s1[qid]
+        survivors = set(sorted(s1_scores, key=lambda d: -s1_scores[d])[:k_c])
+        doc_scores = {d: s2[qid][d] for d in survivors if d in s2[qid]}
         vals = list(doc_scores.values())
+        if not vals:
+            continue
         vmin, vmax = min(vals), max(vals)
         vrange = max(vmax - vmin, 1e-12)
         for did, score in doc_scores.items():
             s2_rows.append({
                 "query_id": str(qid), "doc_id": str(did),
-                "feature_version": "v1", "feature_name": "stage2_score",
+                "feature_version": "v2", "feature_name": "stage2_score",
                 "value": float(score), "generation_seconds": 0.0,
             })
             s2_rows.append({
                 "query_id": str(qid), "doc_id": str(did),
-                "feature_version": "v1", "feature_name": "stage2_score_norm",
+                "feature_version": "v2", "feature_name": "stage2_score_norm",
                 "value": float((score - vmin) / vrange),
                 "generation_seconds": 0.0,
             })

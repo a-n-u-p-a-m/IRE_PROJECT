@@ -206,9 +206,97 @@ class TestPassageLengthFeatures:
             assert words == 0.0
 
 
+
+class TestStage2FeaturesAndLeakagePrevention:
+    class FakeCache:
+        def __init__(self, scores: dict[tuple[str, str, str], float]):
+            self._scores = scores
+
+        def get(self, query_id: str, doc_id: str, model: str) -> float | None:
+            return self._scores.get((str(query_id), str(doc_id), str(model)))
+
+        def get_query(self, query_id: str, model: str) -> dict[str, float]:
+            qid = str(query_id)
+            m = str(model)
+            return {
+                did: score
+                for (q, did, mod), score in self._scores.items()
+                if q == qid and mod == m
+            }
+
+    def test_extract_all_features_restricts_stage2_to_survivors(self):
+        """
+        Verify that extract_all_features restricts Stage-2 features (stage2_score,
+        stage2_score_norm, rank_drop) strictly to C_q survivors (rank <= k_c).
+        Non-survivors must NOT receive Stage-2 features, preventing feature leakage.
+        """
+        from experiments_chaitanya.features import extract_all_features, FEATURE_VERSION
+        assert FEATURE_VERSION == "v2"
+
+        k_c = 3
+        run = _make_synthetic_run(n_queries=1, n_docs=10, k_c=k_c)
+        qid = run["query_id"].iloc[0]
+        model = "test-model"
+
+        # Cache contains Stage-2 scores for all 10 documents
+        scores = {
+            (qid, row["doc_id"], model): float(10 - row["rank"])
+            for _, row in run.iterrows()
+        }
+        cache = self.FakeCache(scores)
+
+        feats = extract_all_features(
+            run=run,
+            cache=cache,
+            system="bm25",
+            model=model,
+            k_c=k_c,
+        )
+        assert not feats.empty
+
+        # Check version
+        assert (feats["feature_version"] == "v2").all()
+
+        # Group by feature_name
+        survivor_doc_ids = set(run[run["rank"] <= k_c]["doc_id"])
+        non_survivor_doc_ids = set(run[run["rank"] > k_c]["doc_id"])
+        assert len(survivor_doc_ids) == 3
+        assert len(non_survivor_doc_ids) == 7
+
+        stage2_feature_names = {"stage2_score", "stage2_score_norm", "rank_drop"}
+        for s2_name in stage2_feature_names:
+            sub = feats[feats["feature_name"] == s2_name]
+            scored_docs = set(sub["doc_id"])
+            assert scored_docs == survivor_doc_ids, (
+                f"Feature {s2_name} leaked to non-survivors or missed survivors: {scored_docs} vs {survivor_doc_ids}"
+            )
+            # Absolutely zero non-survivors should have this feature
+            leaked = scored_docs.intersection(non_survivor_doc_ids)
+            assert len(leaked) == 0, f"LEAKAGE DETECTED: {s2_name} contains non-survivors {leaked}"
+
+        # Stage-1 features should cover all 10 docs
+        s1_rank_sub = feats[feats["feature_name"] == "stage1_rank"]
+        assert set(s1_rank_sub["doc_id"]) == survivor_doc_ids.union(non_survivor_doc_ids)
+
+
+class TestThroughputConfig:
+    def test_load_frozen_params_reads_config(self):
+        from experiments_chaitanya.throughput import _load_frozen_params
+        params = _load_frozen_params()
+        assert "model" in params
+        assert "max_length" in params
+        assert "batch_size" in params
+        assert "precision" in params
+        assert params["model"] == "cross-encoder/ms-marco-MiniLM-L-12-v2"
+        assert params["precision"] == "float32"
+        assert params["max_length"] == 512
+        assert params["batch_size"] == 64
+
+
 # ──────────────────────────────────────────────────────────────────────
 # shard_plan tests
 # ──────────────────────────────────────────────────────────────────────
+
 
 class TestShardPlan:
     def _make_universe(self, n_queries: int = 9, n_docs: int = 100) -> pd.DataFrame:
