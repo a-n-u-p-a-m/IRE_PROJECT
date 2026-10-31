@@ -23,9 +23,20 @@ value now and "confirming" it after seeing the data is tuning with extra steps.
 
 - **Dense Stage 1 is DPR**, `castorini/cosdpr-distil`, trained on MS MARCO.
   Replaces ANCE. Verified locally against Pyserini: TREC-DL19 nDCG@10 0.706 vs
-  published 0.725, R@1000 0.822 vs 0.820. The gap is consistent with float16
-  exact search over the 89-shard index. BM25's published DL19 nDCG@10 is ~0.506,
-  so the lexical-vs-semantic contrast the mismatch axis needs is real.
+  published 0.725, R@1000 0.822 vs 0.820. BM25's published DL19 nDCG@10 is
+  ~0.506, so the lexical-vs-semantic contrast the mismatch axis needs is real.
+
+  **Correction (2026-10-31): the float16 explanation was wrong.** This entry
+  originally attributed the nDCG gap to float16 exact search over the 89-shard
+  index. Re-scoring in float32 returns the same nDCG, so precision is not the
+  cause. The gap holds on both years -- DL19 0.7063 vs 0.7250, DL20 0.6889 vs
+  0.7025, about 0.014-0.019 -- while **recall is at or above published**
+  (0.8224 vs 0.8201; 0.8587 vs 0.8533). Retrieving the right documents and
+  ordering them slightly worse near the top is a different failure from
+  retrieving fewer of them, and it has a different set of candidate causes
+  (query encoding, normalisation, or the tie-break at equal scores). Cause
+  still unknown; recorded as open rather than explained, because the original
+  explanation reads as settled and is not.
 - Stage-1 systems and universe sources: **BM25 and DPR**. DPR is also the
   alternative retriever for outsider selection.
 - Stage 2: pointwise **MiniLM cross-encoder**.
