@@ -10,9 +10,8 @@ Run with::
 """
 from __future__ import annotations
 
-import sys
 import os
-import math
+import sys
 
 import numpy as np
 import pandas as pd
@@ -34,7 +33,8 @@ class TestDictPassageFetcher:
 
     def test_fetch_missing_raises(self):
         from experiments_chaitanya.passage_fetcher import (
-            DictPassageFetcher, PassageFetchError
+            DictPassageFetcher,
+            PassageFetchError,
         )
         f = DictPassageFetcher({"d1": "text"})
         with pytest.raises(PassageFetchError):
@@ -50,7 +50,8 @@ class TestDictPassageFetcher:
 
     def test_fetch_many_raises_on_missing(self):
         from experiments_chaitanya.passage_fetcher import (
-            DictPassageFetcher, PassageFetchError
+            DictPassageFetcher,
+            PassageFetchError,
         )
         f = DictPassageFetcher({"d1": "text"})
         with pytest.raises(PassageFetchError):
@@ -84,7 +85,8 @@ class TestDictPassageFetcher:
 class TestListwiseStub:
     def test_stub_raises_on_instantiation(self):
         from experiments_chaitanya.reranker import (
-            ListwiseCrossEncoderStub, ListwiseRerankerError
+            ListwiseCrossEncoderStub,
+            ListwiseRerankerError,
         )
         with pytest.raises(ListwiseRerankerError):
             ListwiseCrossEncoderStub()
@@ -230,7 +232,7 @@ class TestStage2FeaturesAndLeakagePrevention:
         stage2_score_norm, rank_drop) strictly to C_q survivors (rank <= k_c).
         Non-survivors must NOT receive Stage-2 features, preventing feature leakage.
         """
-        from experiments_chaitanya.features import extract_all_features, FEATURE_VERSION
+        from experiments_chaitanya.features import FEATURE_VERSION, extract_all_features
         assert FEATURE_VERSION == "v2"
 
         k_c = 3
@@ -391,7 +393,6 @@ class TestSyntheticPipeline:
 
     def test_fidelity_table_has_effect_types(self, tmp_path):
         from experiments_chaitanya.run_synthetic import run_synthetic_pipeline
-        from shared.schema import E_RERANK, E_GATE
         results = run_synthetic_pipeline(
             n_queries=20, n_docs=150, k_c=50, k=5,
             output_dir=str(tmp_path / "synth2"),
