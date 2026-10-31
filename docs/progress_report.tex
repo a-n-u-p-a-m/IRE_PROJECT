@@ -1,5 +1,5 @@
 \documentclass[10pt,a4paper]{article}
-\usepackage[left=1.35cm,right=1.35cm,top=1.2cm,bottom=1cm]{geometry}
+\usepackage[left=1.35cm,right=1.35cm,top=1.2cm,bottom=0.8cm]{geometry}
 \usepackage[expansion=false]{microtype}
 
 \usepackage{booktabs,amsmath,amssymb,enumitem,titlesec,multicol}
@@ -10,7 +10,7 @@
 \titleformat{\section}{\normalfont\bfseries}{\thesection.}{0.4em}{}
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{1.6pt}
+\setlength{\parskip}{1.2pt}
 \newcommand{\Uq}{U_q}
 \newcommand{\Kc}{K_c}
 
@@ -21,7 +21,7 @@
 {\small Progress Report, Weeks 1--2 \;\textbullet\; Anupam Dwivedi, Shubham
 Paliwal, Chaitanya K\\
 CS4.406 Information Retrieval \& Extraction, IIIT Hyderabad \;\textbullet\;
-30 October 2026}
+31 October 2026}
 \end{center}
 \vspace{-4pt}
 \hrule
@@ -37,9 +37,8 @@ question, so we build four counterfactual worlds over a frozen universe $\Uq$
 them. Their sign rules hold only \emph{conditionally on membership}, so all
 validation is stratified and no pooled statistic is reported.
 
-\textbf{Weeks 1 and 2 are complete.} All infrastructure, data artefacts and
-pre-registered decisions are in place. No real Stage-2 scores exist yet; that is
-Week~3.
+\textbf{Weeks 1 and 2 are complete}, with all three workstreams merged. No real
+Stage-2 scores exist yet; that is Week~3.
 
 \vspace{3pt}
 \begin{minipage}[t]{0.495\textwidth}
@@ -54,8 +53,8 @@ Universe pairs & \textbf{872{,}455} \\
 Headline $\Kc$ & 100 \\
 Allocations audited & 11{,}640 \\
 Stage-2 bill & 872{,}455 pairs, ${\sim}$27 min \\
-Tests passing & \textbf{415} \\
-Commits / merged PRs & 29 / 4 \\
+Tests passing & \textbf{442} \\
+Commits / merged PRs & 45 / 4 \\
 \bottomrule
 \end{tabular}}
 \end{minipage}\hfill
@@ -89,9 +88,9 @@ verifier, the frozen universe, the feasibility gate, Stage-1 over $\Uq$, the
 reference subset and the $t$-allocations with audits. \textbf{Shubham} (46 tests): DPR
 Stage-1 run, the counterfactual engine, E1 exact-recovery validation, the H7
 power simulation, effect analysis, condensed-mode support. \textbf{Chaitanya}
-(25 tests, in PR): reranker wrapper, cache filler, features, predictors,
+(27 tests): reranker wrapper, cache filler, features, predictors,
 cost--fidelity harness, shard plan, GPU throughput and the shuffle-invariance
-test.
+test. All three workstreams are merged.
 
 \section{Key results}
 
@@ -106,7 +105,7 @@ Outsider-policy supply is $40$--$49\times$ the budget, so \texttt{boundary} and
 \textbf{Cost is not a constraint.} The cache keys on
 $(\text{query},\text{doc})$ and every world re-ranks a subset of $\Uq$, so the
 whole project costs $872{,}455$ calls \emph{once} --- a measured 27-minute job
-at 535 pairs/sec. This retired the reference-subset sampling design entirely.
+at 535 pairs/sec. This retired the reference-subset sampling design.
 Shuffle-invariance passed on the real reranker, verifying rather than assuming
 the pointwise property the $E_{\text{gate}}$ derivation rests on.
 
@@ -117,9 +116,8 @@ falls short ($0.67$/$0.41$). Declared descriptive in advance.
 
 \section{Corrections --- the fortnight's most valuable output}
 
-Five defects were found in shared code, \textbf{four of them in checks that
-passed while being structurally unable to detect the failure they existed to
-catch}: the H7 power denominator conditioned on testability and so overstated
+Six defects were found and fixed, \textbf{four of them in checks that passed
+while being structurally unable to detect the failure they existed to catch}: the H7 power denominator conditioned on testability and so overstated
 power; ``relevant'' counted grade-1 documents that carry zero gain, inflating
 the gate-failure supply $4$--$9\times$ and nearly deciding the headline $\Kc$
 from the wrong number; the BM25 verifier used exponential gain where \texttt{trec\_eval} uses linear,
@@ -129,9 +127,11 @@ matched its own shortfall.
 Separately, our own pre-declared headline-$\Kc$ rule conflated a non-degeneracy
 floor with a selection rule and so chose the depth with \emph{least} signal; the
 correction is recorded as post-hoc, defensible only because supply is measurable
-before any effect exists. A sixth, open: Stage-2 features built over all of
-$\Uq$ do not approximate $e_{\text{gate}}$ for a non-survivor, they
-\emph{determine} it.
+before any effect exists. The sixth was feature leakage: Stage-2 features over
+all of $\Uq$ do not \emph{approximate} $e_{\text{gate}}$ for a non-survivor,
+they \emph{determine} it, since a cached score outside $C_q$ exists only
+because world~C was computed. Now restricted to survivors, with the parameter
+renamed so the signature enforces it.
 
 \section{Open validity threat, and how it is handled}
 
@@ -146,9 +146,8 @@ a disagreement is itself a finding.
 
 \section{Future work}
 
-\textbf{Week 3.} \emph{Blocking:} the feature-leakage fix in PR \#3, after
-which the synthetic fidelity numbers must be regenerated. Then fill the cache
-under the shard plan; compute $E_{\text{rerank}}$, $E_{\text{gate}}$ and
+\textbf{Week 3.} Nothing is blocked. Regenerate the synthetic fidelity numbers
+under the corrected feature boundary; fill the cache; compute $E_{\text{rerank}}$, $E_{\text{gate}}$ and
 $\Delta_t$ over the real universe in both modes; and take the decisive
 measurement --- if world C's top-10 is ${\sim}20\%$ unjudged the concern is a
 footnote, if ${\sim}95\%$ the condensed figure becomes the headline.
@@ -163,8 +162,8 @@ having none), so per-query distributions will be noisy and must be reported
 with their supply.
 
 \end{multicols}
-\vspace{2pt}\hrule\vspace{2pt}
-{\footnotesize Repository \texttt{a-n-u-p-a-m/IRE\_PROJECT}; reasoning for
-every decision, and an extended version of this report, in \texttt{docs/}.}
+\vspace{1pt}\hrule\vspace{1pt}
+{\footnotesize Repository \texttt{a-n-u-p-a-m/IRE\_PROJECT}; decisions and an
+extended report in \texttt{docs/}.}
 
 \end{document}
