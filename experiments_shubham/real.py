@@ -36,6 +36,14 @@ reading under which `alternative` differs from `boundary` for both of them.
 The manifest records the reranker, the number of cached rows and a digest of
 their content (sorted, so independent of the order the shards were merged
 in), so every effect table names the exact scores it was computed from.
+
+`--queries-from` runs a subset, e.g. one member's shard before the others have
+landed. It writes to `effects/real_preview` by default, never next to the full
+run, and the manifest records the subset:
+
+    python -m experiments_shubham.real --system bm25 \
+        --cache cache/stage2_shard_shubham.sqlite \
+        --queries-from cache/stage2_shard_shubham_manifest.json
 """
 
 from __future__ import annotations
@@ -164,11 +172,20 @@ def _selected_sets(frame: pd.DataFrame, seed_free: bool) -> dict[tuple, frozense
             for k, g in frame.groupby(keys, observed=True)}
 
 
+def read_query_ids(path: str | Path) -> list[str]:
+    """Query ids from a shard manifest (its `query_ids`) or a one-per-line file."""
+    path = Path(path)
+    if path.suffix == ".json":
+        return [str(q) for q in read_manifest(path)["query_ids"]]
+    return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+
+
 def check_allocations(
     effects_dir: str | Path,
     system: str,
     cfg: FrozenConfig,
     published_path: str | Path,
+    query_ids: Sequence[str] | None = None,
 ) -> dict:
     """
     Compare world D's selected outsiders with the published allocations.
@@ -182,6 +199,8 @@ def check_allocations(
     published = published[(published["stage1_system"] == system)
                           & (published["t"] < 1.0)]
     published = published.astype({"query_id": str, "doc_id": str})
+    if query_ids is not None:
+        published = published[published["query_id"].isin({str(q) for q in query_ids})]
     n_checked, mismatched = 0, []
     for k_c in cfg.candidate_depths:
         for policy in cfg.outsider_policies:
@@ -224,7 +243,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--qrels", default=None, help="default: dataset.qrels_file")
     parser.add_argument("--published-allocations", default=None,
                         help="default: <paths.analysis>/allocation_promoted.parquet")
-    parser.add_argument("--out-dir", default=None, help="default: <paths.effects>/real")
+    parser.add_argument("--queries-from", default=None,
+                        help="run a subset: a shard manifest (.json, its query_ids) or "
+                             "one query id per line")
+    parser.add_argument("--out-dir", default=None,
+                        help="default: <paths.effects>/real, or real_preview for a subset")
     parser.add_argument("--include-optional-t", action="store_true")
     args = parser.parse_args(argv)
 
@@ -249,10 +272,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cache = Stage2Cache(cache_path)
     universe_path = args.universe or paths.get("universe", "data/universe.parquet")
+    subset = read_query_ids(args.queries_from) if args.queries_from else None
     queries = load_queries(
         cfg, args.system, cache, model, universe_path,
-        args.tables_dir or paths.get("data", "data"), args.qrels or cfg.qrels_file)
-    out_dir = Path(args.out_dir or Path(paths.get("effects", "effects")) / "real")
+        args.tables_dir or paths.get("data", "data"), args.qrels or cfg.qrels_file,
+        query_ids=subset)
+    default_dir = "real" if subset is None else "real_preview"
+    out_dir = Path(args.out_dir or Path(paths.get("effects", "effects")) / default_dir)
     written = run_grid(
         queries, cfg, EffectSettings.from_config(cfg, args.system), out_dir,
         include_optional_t=args.include_optional_t,
@@ -262,10 +288,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "stage2_model": model, "stage2_cache": str(cache_path),
             "stage2_rows": cache.count(model), "stage2_digest": cache_digest(cache, model),
             "t_grid_run": list(grid_t(cfg, args.include_optional_t)),
+            "query_subset": (None if subset is None else
+                             {"from": str(args.queries_from), "n_queries": len(queries)}),
         },
     )
 
-    check = check_allocations(out_dir, args.system, cfg, published)
+    check = check_allocations(out_dir, args.system, cfg, published, subset)
     manifest = read_manifest(written["manifest"])
     manifest["allocation_check"] = check
     write_manifest(written["manifest"], manifest)

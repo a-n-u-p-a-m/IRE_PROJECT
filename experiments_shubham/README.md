@@ -64,6 +64,11 @@ the shared readers refuse a frame holding both.
     python -m experiments_shubham.real --system dpr
     python -m experiments_shubham.analysis --effects-dir effects/real --system bm25
 
+    # one shard, before the others land (~3 min per system for 32 queries):
+    python -m experiments_shubham.real --system bm25 \
+        --cache cache/stage2_shard_shubham.sqlite \
+        --queries-from cache/stage2_shard_shubham_manifest.json   # -> effects/real_preview
+
 It refuses to start unless the universe carries the current fingerprint, both
 Stage-1 tables cover exactly U_q, and the cache holds every (q, d) in U_q under
 `stage2.model`. The alternative retriever is the other Stage-1 system, as in the

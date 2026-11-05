@@ -12,6 +12,7 @@ is the loader's fault.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pandas as pd
@@ -232,3 +233,21 @@ def test_main_refuses_allocations_from_another_freeze(small_cfg_path, artefacts)
     (artefacts / "allocation_manifest.json").write_text('{"config_fingerprint": "000000000000"}')
     with pytest.raises(SystemExit):
         real.main(_argv(small_cfg_path, artefacts))
+
+
+@pytest.mark.parametrize("fmt", ["json", "txt"])
+def test_main_runs_one_shard_and_checks_only_its_allocations(
+        small_cfg, small_cfg_path, cascade, artefacts, fmt):
+    shard = sorted(q.query_id for q in cascade)[:2]
+    ids = artefacts / f"shard.{fmt}"
+    ids.write_text(json.dumps({"query_ids": shard}) if fmt == "json" else "\n".join(shard))
+    assert real.main(_argv(small_cfg_path, artefacts) + ["--queries-from", str(ids)]) == 0
+    manifest = read_manifest(artefacts / "effects" / "bm25_manifest.json")
+    assert manifest["n_queries"] == 2
+    assert manifest["query_subset"] == {"from": str(ids), "n_queries": 2}
+    full = (len(small_cfg.candidate_depths) * 4 * (len(small_cfg.t_grid) - 1)
+            * (len(small_cfg.outsider_policies) - 1 + len(small_cfg.budget_seeds)))
+    assert manifest["allocation_check"]["ok"]
+    assert manifest["allocation_check"]["n_allocations"] == full // 2
+    stage = pd.read_parquet(artefacts / "effects" / "bm25_stage_kc20.parquet")
+    assert sorted(stage["query_id"].unique()) == shard
