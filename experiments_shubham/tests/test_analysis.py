@@ -8,6 +8,7 @@ the whole run works on a small synthetic grid.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -110,13 +111,35 @@ def test_additivity_figure_shows_the_toy_residual(toy_stage, tmp_path):
     assert info["share_off_diagonal"] > 0 and info["max_abs_residual"] >= 7.0
 
 
+def test_unjudged_at_k_counts_each_worlds_top_k(grid):
+    queries, settings = grid
+    rng = np.random.default_rng(3)
+    queries = [replace(q, judged={d: True for d in q.universe if rng.random() < 0.3})
+               for q in queries]
+    for k_c in (20, 50):
+        got = analysis.unjudged_at_k(run_worlds(queries, k_c, settings))
+        got = got.set_index(["query_id", "world"])
+        assert len(got) == 3 * len(queries)
+        for q in queries:
+            w = build_worlds(q.query_id, q.universe, q.s1, q.s2, k_c)
+            for world, ranking in (("A", w.pi_act), ("B", w.pi_no2), ("C", w.pi_no1)):
+                top = ranking[:settings.k]
+                row = got.loc[(q.query_id, world)]
+                assert row["n_top"] == len(top)
+                assert row["n_unjudged"] == sum(d not in q.judged for d in top)
+
+        condensed = analysis.unjudged_at_k(run_worlds(queries, k_c, settings,
+                                                      condensed=True))
+        assert (condensed["n_unjudged"] == 0).all()
+
+
 def test_run_end_to_end(small_cfg, grid, tmp_path):
     queries, settings = grid
     run_grid(queries, small_cfg, settings, tmp_path / "effects")
     result = analysis.run(tmp_path / "effects", "synthetic", 50, small_cfg,
                           tmp_path / "out", n_permutations=200)
     for name in ("distributions", "diagnosis", "budget_outcomes", "h7", "labels",
-                 "gating_failures"):
+                 "gating_failures", "unjudged_at_k"):
         assert (tmp_path / "out" / f"{name}.csv").exists()
     assert (tmp_path / "out" / "additivity.png").exists()
     assert (tmp_path / "out" / "additivity_condensed.png").exists()

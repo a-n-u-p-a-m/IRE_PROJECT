@@ -19,6 +19,8 @@ ones in Week 3:
     H7              per (policy, t): the group test (shared.diagnosis.h7_test)
                     and the continuous one-sided Spearman(G_q, Delta DCG), with
                     group sizes beside every p-value
+    unjudged_at_k   per (query, world A/B/C): the unjudged share of the top-k,
+                    which decides how far the uncondensed E_gate can be trusted
 
 Each of these runs once per ranking mode, reading that mode's own files, and
 every output row carries `condensed`. False is the primary estimand; True is
@@ -93,6 +95,39 @@ def distributions(effects: pd.DataFrame, judged_only: bool = False) -> pd.DataFr
             **{f"q{int(q * 100):02d}": float(np.quantile(x, q)) for q in QUANTILES},
         })
     return pd.DataFrame(rows)
+
+
+#: (world, effect type, rank column): where each world's ranking lives in a
+#: stage table. World C is E_gate's control; A and B are E_rerank's two sides.
+WORLD_RANKS = (("A", E_RERANK, "rank_treatment"), ("B", E_RERANK, "rank_control"),
+               ("C", E_GATE, "rank_control"))
+
+
+def unjudged_at_k(stage: pd.DataFrame) -> pd.DataFrame:
+    """
+    Per (query, world): how much of the top-k is unjudged.
+
+    This is the measurement that decides how much the uncondensed E_gate is
+    worth. World C ranks all of U_q, which is ~1.65% judged, so unjudged
+    documents can displace judged survivors out of its top-k and drag E_gate
+    towards DCG(pi_act) as an artefact of pooling. A small share makes the
+    concern a footnote; a large one makes the condensed figure the headline.
+    The condensed table gives 0 here by construction.
+    """
+    single_mode(stage, "unjudged_at_k")
+    rows = []
+    for world, effect_type, col in WORLD_RANKS:
+        blk = stage[(stage["effect_type"] == effect_type)
+                    & stage[col].notna() & (stage[col] <= stage["k"])]
+        judged = blk["judged"].fillna(False).astype(bool)
+        per = (blk.assign(unjudged=~judged)
+               .groupby(["query_id", "k_c", "k"], observed=True)["unjudged"]
+               .agg(n_top="size", n_unjudged="sum").reset_index())
+        per.insert(1, "world", world)
+        rows.append(per)
+    out = pd.concat(rows, ignore_index=True)
+    out["share_unjudged"] = out["n_unjudged"] / out["n_top"]
+    return out
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -251,6 +286,7 @@ def run(effects_dir: str | Path, system: str, k_c: int, cfg: FrozenConfig,
             "budget_outcomes": budget_outcomes(budgets),
             "labels": label_summary(stage, cfg.tau_document),
             "gating_failures": gating_failure_examples(stage),
+            "unjudged_at_k": unjudged_at_k(stage),
         }
         tables["h7"] = h7(diag, tables["budget_outcomes"], n_permutations, cfg.seed)
         for name, df in tables.items():

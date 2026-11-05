@@ -9,7 +9,12 @@ from shared.config import load_config
 
 
 @pytest.fixture(scope="session")
-def small_cfg(tmp_path_factory):
+def small_cfg(small_cfg_path):
+    return load_config(small_cfg_path)
+
+
+@pytest.fixture(scope="session")
+def small_cfg_path(tmp_path_factory):
     """The frozen config with a grid small enough for a unit test."""
     with open("config/base.yaml", encoding="utf-8") as fh:
         raw = yaml.safe_load(fh)
@@ -20,4 +25,4 @@ def small_cfg(tmp_path_factory):
     raw["power"]["n_simulations"] = 30
     path = tmp_path_factory.mktemp("cfg") / "small.yaml"
     path.write_text(yaml.safe_dump(raw))
-    return load_config(path)
+    return path

@@ -46,6 +46,37 @@ unjudged documents are dropped before ranks are assigned and rows cover judged
 documents only. Pick one mode per computation (`shared.schema.select_mode`);
 the shared readers refuse a frame holding both.
 
+## Real effects (Week 3)
+
+| file | what it does |
+|---|---|
+| `real.py` | the engine on the frozen universe: `QueryInputs` from `data/universe.parquet`, `data/stage1_over_universe_<s>.parquet`, `data/qrels.parquet` and the Stage-2 cache, then the whole grid, then world D checked against the published allocations |
+| `cache_fill_colab.ipynb` | fills one member's cache shard on a Colab T4 (set `OWNER`): rebuilds the universe, shuffle spot check, resumable fill with Drive copies, completeness check, shard manifest with digest |
+| `tests/test_real.py` | a synthetic cascade written out as the real artefacts reproduces the synthetic path exactly; each refusal; a corrupted published allocation is caught for every policy |
+
+    # inputs, all reproducible from the committed runs (no GPU):
+    python -m experiments_anupam.data_prep --queries data/queries.tsv --qrels-txt data/qrels.txt
+    python -m experiments_anupam.build_universe --qrels data/qrels.parquet
+    python -m experiments_anupam.stage1_over_universe
+    python -m experiments_anupam.allocations
+
+    python -m experiments_shubham.real --system bm25      # ~10 min, ~3.5 GB peak
+    python -m experiments_shubham.real --system dpr
+    python -m experiments_shubham.analysis --effects-dir effects/real --system bm25
+
+It refuses to start unless the universe carries the current fingerprint, both
+Stage-1 tables cover exactly U_q, and the cache holds every (q, d) in U_q under
+`stage2.model`. The alternative retriever is the other Stage-1 system, as in the
+published allocations. The manifest records the cache's row count and an
+order-independent digest of its scores, and `allocation_check`: every selected
+outsider in the budget tables must equal `analysis/allocation_promoted.parquet`,
+or the run exits non-zero.
+
+Dry run on the real universe with stand-in Stage-2 scores (2026-11-05, M1, 16 GB):
+both systems, all 12 tables per mode, invariants pass, world D equal to the
+published allocations at all 4,365 allocations per system; 9.5 min per system,
+~400 MB of Parquet in all.
+
 ## E1 - synthetic implementation validation
 
 | file | what it does |
@@ -100,8 +131,8 @@ with label shares, headline power and both recommendations, to
 
 | file | what it does |
 |---|---|
-| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, and H7 (group and continuous tests) per policy and t |
-| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; end-to-end run on a small grid |
+| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, H7 (group and continuous tests) per policy and t, and the unjudged share of each world's top-k |
+| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; unjudged shares match a direct count; end-to-end run on a small grid |
 
 It reads only what `engine.run_grid` writes, so it runs unchanged on the real
 effect tables in Week 3. K_c defaults to the feasibility report's headline.
