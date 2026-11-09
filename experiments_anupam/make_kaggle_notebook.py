@@ -1,7 +1,7 @@
 """
 make_kaggle_notebook.py - Derive the Kaggle fill notebook from the Colab one.
 
-    python -m experiments_shubham.make_kaggle_notebook
+    python -m experiments_anupam.make_kaggle_notebook
 
 The two notebooks must differ ONLY in platform plumbing. Generating one from
 the other is how that stays true: every scientific cell - the universe
@@ -28,8 +28,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+# SRC stays in experiments_shubham: the Colab notebook is Shubham's and is the
+# upstream of this one. Generating across directories is the point - the two
+# notebooks must not become independently maintained copies.
 SRC = Path("experiments_shubham/cache_fill_colab.ipynb")
-DST = Path("experiments_shubham/cache_fill_kaggle.ipynb")
+DST = Path("experiments_anupam/cache_fill_kaggle.ipynb")
 
 # Cells copied verbatim; the fill procedure lives here and must not diverge.
 # 7 is excluded only because its heading names Drive, which Kaggle has not.
@@ -47,7 +50,7 @@ CELL_0 = """\
 # Stage-2 cache fill: one shard (Week 3) — Kaggle
 
 Generated from `cache_fill_colab.ipynb` by
-`experiments_shubham/make_kaggle_notebook.py`. Only the two platform cells
+`experiments_anupam/make_kaggle_notebook.py`. Only the two platform cells
 differ; every scientific cell is byte-identical, which the generator asserts.
 
 **Before running:** Settings → Accelerator → **GPU T4 x2** (one is used), and
