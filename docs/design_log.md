@@ -706,4 +706,69 @@ statistic now rests on a measurement instead of an argument.
 
 ---
 
+## 2026-11-10 (later) — DPR has no gate-sensitive queries, and why that is the result
+
+Running the same preview for `dpr` on the same 33 queries gives **0
+gate-sensitive queries** against bm25's 5 (6 condensed). The naive reading -
+"dpr retrieves better, so it discards less" - is wrong, and the committed
+full-97 feasibility run says so directly. At `K_c=100`:
+
+| | median gainful non-survivors | queries with supply |
+|---|---|---|
+| bm25 | 6.0 | 80/97 |
+| dpr | **6.0** | 74/97 |
+
+**The two retrievers discard the same quantity of gain-carrying documents.**
+What differs is whether those documents matter: bm25 discards passages the
+cross-encoder would have placed in the top-10, and dpr does not. Both
+retrievers throw away about six judged, gainful documents per query; only one
+of them throws away the ones that would have changed the answer.
+
+The mechanism is paradigm alignment. Stage 2 is a dense cross-encoder, so
+dpr's ordering already correlates with what Stage 2 wants and dpr's top-100
+contains world C's top-10. bm25 is lexical, and its discards include
+semantically relevant passages that the cross-encoder then ranks highly. This
+is the lexical-vs-semantic comparison the project set out to make, and it is a
+stronger claim than a recall difference, because recall of gainful documents
+is the same.
+
+Three signals in the dpr run agree, which is what makes it a mechanism rather
+than a null:
+
+  * 0 gate-sensitive queries;
+  * `alternative` returns nothing (rho 0.03-0.05, p ~0.40), where bm25 gave
+    rho 0.72-0.87 at p < 0.001 - the second opinion has nothing to find
+    because nothing worth finding was discarded;
+  * `random` actively HURTS (rho -0.44, -0.35, p -> 1), where for bm25 it was
+    roughly null. Removing dpr candidates to make room for random outsiders is
+    strictly bad, which can only hold if the candidates were already right.
+
+### What this does and does not establish
+
+0 of 33 is weak alone: under the simulated 5.6% rate, P(0 of 33) = 0.149, so
+the observation is unsurprising even if dpr's true rate matched bm25's. The
+claim rests on the CONTRAST, 5/33 against 0/33, Fisher one-sided p = 0.027.
+Both ran on the same 33 queries, so that treats paired data as unpaired;
+**the full-97 analysis must use McNemar on the per-query pairs instead.**
+
+### Supply is not sensitivity
+
+The headline `K_c=100` was chosen by greatest gate-failure SUPPLY among
+non-degenerate depths. dpr demonstrates that supply does not convert into
+sensitivity: 74 of 97 queries carry gainful non-survivors, and none of the 33
+tested is gate-sensitive. Supply is necessary and not sufficient, and the
+writeup must keep the two apart or it will read as a contradiction between the
+feasibility report and the results.
+
+### A correction to the previous entry
+
+That entry recorded that the two modes agree on every qualitative conclusion.
+That was measured on bm25 only. In dpr, `boundary` at t=0.5 flips sign between
+modes - +0.398 (p 0.011) uncondensed against -0.194 condensed. With zero
+gate-sensitive queries the H7 frame is degenerate there and it should not be
+read as a finding, but the claim as written was broader than the evidence and
+is narrowed here to bm25.
+
+---
+
 <!-- next entry below -->
