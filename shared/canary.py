@@ -49,6 +49,7 @@ from typing import Protocol
 
 __all__ = [
     "CANARY_QUERY", "CANARY_PASSAGES", "CANARY_DOC_IDS",
+    "REFERENCE_DIGEST", "REFERENCE_SCORES", "REFERENCE_ENV",
     "canary_scores", "canary_digest", "compare_canaries",
 ]
 
@@ -71,6 +72,43 @@ CANARY_PASSAGES: tuple[str, ...] = (
 CANARY_DOC_IDS: tuple[str, ...] = tuple(
     f"canary{i:02d}" for i in range(len(CANARY_PASSAGES))
 )
+
+
+# ── the recorded reference ────────────────────────────────────────────
+#
+# An OBSERVATION, not a definition of correctness: what this model produced on
+# the environment below, during the shard-1 fill on Kaggle. It is committed so
+# a later fill can be checked without anyone else being online - run the
+# canary, compare to REFERENCE_DIGEST, done.
+#
+# Compare only against a matching REFERENCE_ENV. torch and cuda are what
+# matter; numpy is listed because it is in the manifest, but it takes no part
+# in the forward pass (the shard-1 and shard-2 fills differed on numpy -
+# 2.1.3 against 2.4.6 - and agreed on everything that does matter).
+REFERENCE_ENV: dict[str, str] = {
+    "python": "3.13.16",
+    "torch": "2.11.0+cu130",
+    "cuda": "13.0",
+    "gpu": "Tesla T4",
+    "numpy": "2.1.3",
+    "model": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+    "precision": "float32",
+    "max_length": "512",
+    "observed": "2026-11-09, shard anupam, Kaggle",
+}
+
+REFERENCE_SCORES: dict[str, float] = {
+    "canary00": 5.095918,
+    "canary01": 3.934693,
+    "canary02": -2.580505,
+    "canary03": -11.232469,
+    "canary04": 3.759547,
+    "canary05": -4.246465,
+    "canary06": -11.252432,
+    "canary07": -4.313988,
+}
+
+REFERENCE_DIGEST = "e1121c9d61e14fd5"
 
 
 class _Scorer(Protocol):

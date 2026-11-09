@@ -13,6 +13,8 @@ from shared.canary import (
     CANARY_DOC_IDS,
     CANARY_PASSAGES,
     CANARY_QUERY,
+    REFERENCE_DIGEST,
+    REFERENCE_SCORES,
     canary_digest,
     canary_scores,
     compare_canaries,
@@ -113,3 +115,48 @@ def test_incomplete_canary_is_not_silently_mergeable():
     partial = {d: BASE[d] for d in CANARY_DOC_IDS[:-1]}
     ok, why = compare_canaries(partial, BASE)
     assert not ok and "incomplete" in why
+
+
+# ── the recorded reference ────────────────────────────────────────────
+
+def test_reference_digest_is_consistent_with_reference_scores():
+    """
+    The committed digest must be the one those committed scores produce.
+    Otherwise a later member comparing against REFERENCE_DIGEST would be
+    chasing a transcription error rather than a numerical difference.
+    """
+    assert canary_digest(FakeScorer(REFERENCE_SCORES)) == REFERENCE_DIGEST
+
+
+def test_reference_covers_every_canary_pair():
+    assert set(REFERENCE_SCORES) == set(CANARY_DOC_IDS)
+
+
+def test_reference_compares_clean_against_itself():
+    ok, why = compare_canaries(REFERENCE_SCORES, dict(REFERENCE_SCORES))
+    assert ok and "identical" in why
+
+
+def test_reference_ordering_is_semantically_sensible():
+    """
+    A guard against a silently broken canary. If the reranker ever stopped
+    discriminating, the pairs would still produce a stable digest while
+    measuring nothing. The exact-answer passage must outrank both unrelated
+    ones, by a wide margin.
+    """
+    exact = REFERENCE_SCORES["canary00"]
+    unrelated = max(REFERENCE_SCORES["canary03"], REFERENCE_SCORES["canary06"])
+    assert exact > unrelated
+    assert exact - unrelated > 10.0, "canary has stopped discriminating"
+
+
+def test_reference_tripwire_is_far_above_float_drift():
+    """
+    `compare_canaries` disqualifies any reordering, so the smallest adjacent
+    gap sets the sensitivity. It must sit far above float32 cuBLAS drift
+    (~1e-5), or a clean merge would be blocked by noise.
+    """
+    order = sorted(CANARY_DOC_IDS, key=lambda d: (-REFERENCE_SCORES[d], d))
+    gap = min(REFERENCE_SCORES[a] - REFERENCE_SCORES[b]
+              for a, b in zip(order, order[1:]))
+    assert gap > 1e-3, f"smallest adjacent gap {gap} is too tight to be safe"
