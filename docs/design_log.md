@@ -617,4 +617,93 @@ the one unmet §12.1 pre-run check and is computable from
 
 ---
 
+## 2026-11-10 — Shard 1 filled, and the unjudged question answered
+
+Anupam's shard: 33 queries, 295,531 pairs, 0 errors, digest `9f2cfe600f0e49aa`,
+19.1 min on a Kaggle T4 at 257 pairs/s. Two of three shards in — 582,589 of
+872,455 pairs, 66.8%; the remainder is exactly Chaitanya's 289,866.
+
+The canary found no drift to report. Kaggle and Colab both served
+`torch 2.11.0+cu130`, CUDA 13.0, Python 3.13.16 on a Tesla T4, differing only
+on numpy, which takes no part in the forward pass. `REFERENCE_DIGEST`
+`e1121c9d61e14fd5` is committed so the third fill can be checked against it
+without coordinating with anyone.
+
+### The unjudged share of world C's top-10: 3.87%
+
+**This closes the decision left open at freeze v2.** Measured independently on
+two disjoint query sets:
+
+| | queries | mean | median | max |
+|---|---|---|---|---|
+| shard shubham | 32 | 3.8% | 0 | 40% |
+| shard anupam | 33 | 3.94% | 0 | 40% |
+| combined | 65 of 97 | **3.87%** | 0 | 40% |
+
+They agree to 0.14 percentage points, with identical medians and identical
+maxima. One subset could be a sampling accident; two disjoint subsets agreeing
+this closely is a property of the collection. The median of **0** is the
+striking figure: on more than half of queries, world C's top-10 contains no
+unjudged document at all, drawn from a pool that is 1.78% judged. The reranker
+concentrates pooled documents at the top almost perfectly, which follows from
+NIST having pooled what good systems ranked highly.
+
+The freeze-v2 worry was that unjudged competitors would displace judged
+survivors out of world C's top-k and drag `E_gate` towards `DCG(pi_act)` as an
+artefact of pooling. At 3.87% that mechanism has almost nothing to act on.
+
+**Decision: the UNCONDENSED figure is the headline; the condensed analysis
+becomes the robustness check.** Recommended on this evidence and pending
+Shubham's and Chaitanya's confirmation, per the freeze-v2 note that the mode
+is a team decision. Nothing about the fingerprint changes either way — both
+modes are already computed on every run, which was the point of deciding to
+compute both rather than choosing early.
+
+The stronger argument for the decision is not the 3.87% at all. It is that on
+33 queries **the two modes agree on every qualitative conclusion** — the same
+policies significant, the same null, effect sizes within roughly 20%. The
+conclusion does not depend on the mode, so the choice of headline is a
+presentational one rather than a load-bearing one.
+
+### H7 on 33 queries, bm25, K_c=100 — preview only
+
+`alternative` is significant on BOTH tests at every `t` and in both modes
+(group p 0.0001–0.0005; Spearman rho 0.72–0.87, p 3e-11 to 2e-07). `random`
+is null throughout — p 0.21 to 1.00, rho negative at two of three `t` — which
+is what makes the `alternative` result mean something other than "reranking
+more documents helps". `boundary` is null at t=0.9 and 0.75 and significant at
+t=0.5 (p 0.0035, rho 0.46), consistent with boundary documents resembling the
+worst survivors until enough are promoted.
+
+Three qualifications, all of which must survive into the report:
+
+  * **The p-values sit at the permutation floor.** With 10,000 permutations
+    the smallest achievable is ~1e-4. Report `p < 0.001`, never `p = 0.0002`.
+  * **This is 33 of 97 queries, and it is a preview.** The confirmatory
+    analysis is pre-registered on the full set. Having now seen this, nothing
+    about the test may be adjusted; that is what preserves the registration.
+  * **The group test is not weak**, contrary to the Week-3 note. That note saw
+    2–4 gate-sensitive queries of 32; this shard has 5 (uncondensed) and 6
+    (condensed) of 33, and the group test clears at every `t`. So no switch
+    between the group and continuous tests is needed, and the question of
+    justifying one post hoc does not arise. The 29 Oct power manifest had
+    already put `continuous|alternative` above `group|alternative` at n=97
+    (0.935 against 0.875); both were adequately powered then and both pass now.
+
+Observed gate-sensitivity, 15–18% across the two shards, runs about three
+times the 5.6% the H2 simulation assumed at `U=9097, K_c=100`, and the
+observed effect is far larger than the simulation's: power at n=30 was put at
+0.525, against an observed p of 3e-11. The power analysis was conservative,
+which is the direction one wants to be wrong in.
+
+### Non-additivity, measured
+
+83.0% of documents (uncondensed; 81.4% condensed) lie off the additive
+diagonal, with a maximum absolute residual of **7.0** — the entire gain of a
+grade-3 document. `E_rerank + E_gate` is not `U_d(pi_act)`, by margins as
+large as a perfectly-placed relevant passage. The decision to report no pooled
+statistic now rests on a measurement instead of an argument.
+
+---
+
 <!-- next entry below -->
