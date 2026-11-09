@@ -22,13 +22,31 @@ cache/*
 !cache/.gitkeep
 !cache/*manifest*.json
 
+# `real.py` and `analysis.py` write into a SUBDIRECTORY - effects/real,
+# analysis/real_<system>_kc<k_c> - so the two negations below are not enough on
+# their own. `effects/*` excludes the `effects/real` directory entry, git then
+# never descends into it, and `!effects/*manifest*.json` cannot fire on
+# anything inside: the same trap this file warns about at the top, one level
+# further down. Without `!effects/*/` the manifests for the headline numbers
+# are unreachable, which is exactly the traceability the rule exists to keep.
+# The parquets and CSVs stay ignored - only the manifests are rescued.
+# Three lines per directory, and all three are needed. `!effects/*/` only lets
+# git descend; on its own it un-ignores everything inside, parquets included.
+# `effects/*/*` excludes the contents again, and the last line rescues the
+# manifests alone.
 effects/*
 !effects/.gitkeep
 !effects/*manifest*.json
+!effects/*/
+effects/*/*
+!effects/*/*manifest*.json
 
 analysis/*
 !analysis/.gitkeep
 !analysis/*manifest*.json
+!analysis/*/
+analysis/*/*
+!analysis/*/*manifest*.json
 
 runs_mock/
 
