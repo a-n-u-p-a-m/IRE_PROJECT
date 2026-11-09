@@ -15,6 +15,7 @@ would corrupt a different downstream claim if it slipped:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -314,3 +315,98 @@ def test_a_subset_smaller_than_the_query_set_refuses_to_sample_implicitly(
     )))
     with pytest.raises(SystemExit, match="declared seeded strategy"):
         rs.run(cfg_path, uni, str(pw), str(tmp_path / "ref.txt"))
+
+
+# ── the alternative policy's source ───────────────────────────────────
+
+def test_alternative_is_the_other_system_not_the_config_value(
+    tmp_path, small_cfg_path, two_source_runs
+):
+    """
+    `budget.alternative_source` is DEAD. Nothing reads it.
+
+    The key names one retriever globally, but the policy it configures is
+    inherently relative: a second opinion about what a retriever discarded has
+    to come from a DIFFERENT retriever. Taken literally, `alternative_source:
+    dpr` would make dpr its own alternative and the policy would compare dpr
+    to itself. `allocations.py` resolves "the other stage1 system" instead,
+    which is correct - and leaves the config key asserting something the code
+    does not do.
+
+    `shared.config` still VALIDATES the key (non-empty when the policy is on,
+    and a known source), so it looks live to a reader. It is also a field of
+    the FrozenConfig behind fingerprint 46d0807d8ed3, so changing it would
+    invalidate the frozen universe and all 872,455 cached scores while
+    changing no number. This test is the standing proof of inertness: flip the
+    value to each system in turn and the allocations must be byte-identical.
+    """
+    import pandas as pd
+
+    outputs = {}
+    for source in ("bm25", "dpr"):
+        # A separate tree per value: the frozen universe deliberately refuses
+        # to be rebuilt in place, which is the behaviour being relied on
+        # everywhere else and must not be defeated here.
+        root = tmp_path / f"tree_{source}"
+        root.mkdir()
+        cfg_path = _cfg(
+            root, small_cfg_path,
+            cascade={"candidate_depths": [5]},
+            budget={"alternative_source": source},
+        )
+        uni, tables_dir = _prepare(root, cfg_path, two_source_runs)
+        out = root / "alloc"
+        _, problems = al.run(cfg_path, uni, tables_dir, str(out))
+        assert not problems, problems
+        outputs[source] = pd.read_parquet(out / "allocation_promoted.parquet")
+
+    pd.testing.assert_frame_equal(outputs["bm25"], outputs["dpr"])
+
+
+def test_dpr_alternative_promotions_come_from_bm25_ranks(
+    tmp_path, small_cfg_path, two_source_runs
+):
+    """
+    The behaviour the dead key obscures, stated positively.
+
+    Under `--system dpr` the alternative policy must promote the documents
+    BM25 ranked highest among those dpr discarded. If this ever resolved to
+    dpr itself the promotions would instead be dpr's own next-best documents,
+    which is the boundary policy - and the control would be comparing a
+    retriever with itself.
+    """
+    import pandas as pd
+
+    cfg_path = _cfg(tmp_path, small_cfg_path, cascade={"candidate_depths": [5]})
+    uni, tables_dir = _prepare(tmp_path, cfg_path, two_source_runs)
+    out = tmp_path / "alloc"
+    al.run(cfg_path, uni, tables_dir, str(out))
+
+    promoted = pd.read_parquet(out / "allocation_promoted.parquet")
+    alt = promoted[
+        (promoted["stage1_system"] == "dpr")
+        & (promoted["policy"] == "alternative")
+    ]
+    assert not alt.empty, "no dpr/alternative promotions to check"
+
+    from shared.schema import load
+    bm25_tbl = load(Path(tables_dir) / "stage1_over_universe_bm25.parquet", "run")
+    dpr_tbl = load(Path(tables_dir) / "stage1_over_universe_dpr.parquet", "run")
+    bm25_rank = al.ranks_of_system(bm25_tbl, "bm25")
+    dpr_order = al.stage1_order(dpr_tbl, "dpr")
+
+    for (qid, t), grp in alt.groupby(["query_id", "t"]):
+        if t >= 1.0:
+            continue
+        discarded = dpr_order[qid][5:]
+        n = len(grp)
+        # Ascending rank, unranked last, doc_id tie-break: the ordering
+        # `shared.allocation.select_outsiders` applies for this policy.
+        ranks = bm25_rank[qid]
+        expected = sorted(
+            discarded, key=lambda d: (ranks.get(d, 1 << 30), d)
+        )[:n]
+        assert set(grp["doc_id"]) == set(expected), (
+            f"q={qid} t={t}: dpr's alternative promotions are not bm25's "
+            "top-ranked documents among what dpr discarded"
+        )

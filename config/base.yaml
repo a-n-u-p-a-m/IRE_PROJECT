@@ -75,6 +75,19 @@ budget:
   # rank. That rank is used ONLY to choose the submitted subset; it is never
   # passed to Stage 2, which scores each query-document pair independently.
   candidate_portion_rule: stage1_rank
+  # DESCRIPTIVE, NOT OPERATIVE. No consumer reads this key. `allocations.py`
+  # and `real.py` resolve the alternative as "the other stage1 system", which
+  # is what the policy means: a second opinion must come from a retriever
+  # OTHER than the one being analysed. So bm25's alternative is dpr and dpr's
+  # alternative is bm25 - this single global value cannot express that, and
+  # taking it literally would make dpr its own second opinion.
+  #
+  # It is kept, not deleted, because it is a field of the FrozenConfig that
+  # produces fingerprint 46d0807d8ed3: removing it or changing its value
+  # would invalidate the frozen universe and all 872,455 cached scores while
+  # changing no number anywhere. A comment is free; the value is not.
+  # `test_alternative_is_the_other_system_not_the_config_value` pins the real
+  # behaviour. See docs/design_log.md, 2026-11-09.
   alternative_source: dpr   # which retriever supplies the 'alternative' policy
   seeds: [42, 43, 44]       # repeats for randomised policies
 
