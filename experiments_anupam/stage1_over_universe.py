@@ -28,6 +28,19 @@ the floored fraction is a separate report, which is the right shape anyway: it
 belongs beside every cross-paradigm result. A retriever that floors most of
 U_q is doing far less work than the comparison assumes.
 
+**BUT NOT IN THIS CONFIGURATION.** With both systems at a fixed depth M and
+U_q their union, floored = |U_q| - M for each, so the floored fraction is
+(|U_q| - M)/|U_q| - a function of |U_q| alone. It CANNOT differ between
+systems and therefore measures nothing about either; measured here it is an
+identical 0.450 for both, which is arithmetic, not a finding. Do not report it
+as a retriever property. It becomes informative only at unequal retrieval
+depths, which this project does not use.
+
+What the same quantity does encode is candidate divergence, because
+|U_q| = 2M - |BM25 ^ DPR| exactly (verified on all 97 queries). Report that
+instead: median overlap 903 of 5000, Jaccard 0.099, min overlap 14. See
+docs/design_log.md, 2026-11-09.
+
 Four checks run before anything is written. The first is the one that matters:
 
   * **top-K_c agreement.** The top-K_c of this table must equal the top-K_c of

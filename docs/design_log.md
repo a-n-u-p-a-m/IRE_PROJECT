@@ -516,15 +516,104 @@ finding and gets its own paragraph rather than a footnote.
 | Queries | 97, split 49/19/29 by query, seed 42 |
 | BM25 | verified exact against published figures, delta 0.0000 on all four |
 | Universe | `\|U_q\|` 7,045–9,986, median 9,097, **872,455 pairs**; reproduced bit-identical in three environments across two OSes |
-| Stage-1 over `U_q` | floored fraction 0.450, identical for both systems |
+| Stage-1 over `U_q` | floored fraction 0.450; identical for both systems **by construction**, not as a measurement |
 | Reference subset | all 97 queries |
 | Allocations | 11,640 audited; spend, partition, `t=1` baseline and random-control sensitivity all hold |
-| Stage-2 bill | 872,455 unique pairs, ~27 min on one T4 |
+| Stage-2 bill | 872,455 unique pairs, ~27 min on one T4 *(superseded: see 2026-11-09)* |
 | Tests | 406 passing, 1 skipped |
 
 **Open, and owned by others:** Chaitanya's feature-leakage fix and the padded
 width; Shubham's agreement on the `condensed` column. Nothing blocks the cache
 fill once the leakage fix lands.
+
+---
+
+## 2026-11-09 — Week-3 rebuild, and the candidate divergence measured at depth M
+
+`stage1_over_universe` and `allocations` re-ran clean on the frozen universe:
+top-`K_c` agreement at every depth, exact coverage, floor ordering intact,
+every outsider policy supplied at `B = K_c`. 11,640 allocations, 1,319,200
+promoted documents — verified independently rather than trusted, since the
+total is fully determined:
+
+    per system  =  97 × 5 × Σ_{t<1} (1−t)·B   summed over the three K_c
+                =  97 × [5(10+25+50) + 5(50+125+250) + 5(100+250+500)]
+                =  659,600          ×2 systems  =  1,319,200  ✓
+
+### The floored fraction is not a retriever property
+
+Freeze v2 already recorded that both systems floor exactly `|U_q| − 5000`.
+Restating it here because the *report* must not present it otherwise: with both
+retrievers at a fixed depth M=5000 and `U_q` their union, the floored fraction
+is `(|U_q| − 5000)/|U_q|` — a deterministic function of `|U_q|` alone. It cannot
+differ between systems, so it measures nothing about either. Confirmed on all
+97 queries: `|U_q| = 10000 − |BM25 ∩ DPR|` holds exactly, with no exceptions.
+
+Consequence for `stage1_over_universe`'s own docstring, which claims "a
+retriever that floors most of `U_q` is doing far less work than the comparison
+assumes": true in general, **unmeasurable in this configuration**. It would
+become measurable only with unequal retrieval depths, which we are not doing.
+
+### What the same numbers do measure
+
+The identity above means the floored fraction is a re-encoding of candidate
+divergence, which *is* a result. Computed from the committed run tables:
+
+| BM25 ∩ DPR at depth 5000 | min | median | max |
+|---|---|---|---|
+| overlap (documents) | 14 | **903** | 2,955 |
+| as fraction of each top-5000 | 0.003 | **0.181** | 0.591 |
+| Jaccard | 0.0014 | **0.0993** | 0.4194 |
+
+The two paradigms nominate almost disjoint sets: a median of 903 documents in
+common out of 5000, and on one query **14**. This is consistent with — and
+deeper than — the candidate-depth Jaccard of 0.11–0.16 already recorded under
+the SPLADE decision.
+
+It also supplies a mechanism rather than just a magnitude for the headline
+estimand. `E_gate` is expected to be large not because the reranker is weak but
+because gate *membership* is nearly determinative when the two candidate
+generators agree on under a fifth of their output. That is an argument the
+report can make from measurement instead of assertion.
+
+Reproduce with the committed run tables alone, no GPU and no corpus:
+
+```
+python3 - <<'PY'
+import pandas as pd, numpy as np
+b = pd.read_parquet('runs/bm25.parquet').groupby('query_id')['doc_id'].apply(set)
+d = pd.read_parquet('runs/dpr.parquet').groupby('query_id')['doc_id'].apply(set)
+q = sorted(set(b.index) & set(d.index))
+ov = np.array([len(b[k] & d[k]) for k in q]); un = np.array([len(b[k] | d[k]) for k in q])
+print('overlap', ov.min(), int(np.median(ov)), ov.max())
+print('jaccard', (ov/un).min().round(4), np.median(ov/un).round(4), (ov/un).max().round(4))
+print('identity holds:', bool(np.all(un == 10000 - ov)))
+PY
+```
+
+### Throughput: ~52 min, not ~27
+
+The freeze-v2 estimate is superseded by measurement. Shubham's shard fill ran
+at **282.3 pairs/sec** on a T4 (re-timed; the fill session's own output was lost
+to a disconnect), so the full 872,455-pair bill is **≈51.5 minutes**, not 27.
+The estimate was optimistic by 1.9×. Nothing downstream depends on it — the
+cache is keyed on `(query_id, doc_id, model)` and the fill is resumable — but
+the progress report's "~27 min (est.)" is wrong and should read ~52 min.
+
+### Effects do not need a GPU
+
+Confirmed by inspection: `experiments_shubham/real.py`, `engine.py`,
+`shared/cache.py`, `shared/worlds.py` and `shared/effects.py` import no torch.
+Only the cache *fill* needs an accelerator; computing worlds and effects from a
+filled shard is sqlite reads plus pandas. This matters operationally — Colab
+GPU scarcity blocks the fill but not the analysis, so a preview run on
+Shubham's completed 32-query shard can proceed on a laptop.
+
+**Still open:** the judged fraction of world C's top-10, which decides whether
+the headline `E_gate` is the uncondensed or the condensed figure. It must be
+measured before any analysis prose is written. Candidate-set Recall@K remains
+the one unmet §12.1 pre-run check and is computable from
+`n_relevant_cq / n_relevant_uq` already on disk.
 
 ---
 
