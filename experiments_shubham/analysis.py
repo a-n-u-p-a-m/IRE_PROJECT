@@ -21,6 +21,9 @@ ones in Week 3:
                     group sizes beside every p-value
     unjudged_at_k   per (query, world A/B/C): the unjudged share of the top-k,
                     which decides how far the uncondensed E_gate can be trusted
+    contrast        with --contrast-with: is a label (gate_sensitive by default)
+                    more frequent under one Stage-1 system than the other on the
+                    same queries - exact McNemar, the queries being paired
 
 Each of these runs once per ranking mode, reading that mode's own files, and
 every output row carries `condensed`. False is the primary estimand; True is
@@ -42,7 +45,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
+from scipy.stats import binomtest, spearmanr
 
 from experiments_shubham.engine import MODES, table_name
 from experiments_shubham.power_h7 import headline_k_c
@@ -202,6 +205,45 @@ def h7(diagnosis: pd.DataFrame, outcomes: pd.DataFrame, n_permutations: int = 10
     return pd.DataFrame(rows).sort_values(["policy", "t"], ascending=[True, False])
 
 
+def label_contrast(diag_a: pd.DataFrame, diag_b: pd.DataFrame,
+                   label: str = GATE_SENSITIVE) -> dict:
+    """
+    Is `label` more frequent under system a than under b, on the same queries?
+
+    Exact McNemar. Both systems are diagnosed on the same queries, so the unit
+    is the query pair and only the discordant queries carry information.
+    Fisher's test on the two counts would treat them as independent samples.
+    """
+    single_mode(diag_a, "label_contrast")
+    single_mode(diag_b, "label_contrast")
+    a = diag_a.set_index("query_id")["label"].eq(label)
+    b = diag_b.set_index("query_id")["label"].eq(label)
+    if set(a.index) != set(b.index):
+        raise ValueError("a paired contrast needs both systems on the same queries")
+    b = b.reindex(a.index)
+    only_a, only_b = int((a & ~b).sum()), int((~a & b).sum())
+    n = only_a + only_b
+    return {
+        "label": label, "n_queries": len(a), "n_a": int(a.sum()), "n_b": int(b.sum()),
+        "both": int((a & b).sum()), "only_a": only_a, "only_b": only_b,
+        "p_one_sided": binomtest(only_a, n, 0.5, alternative="greater").pvalue if n
+        else float("nan"),
+        "p_two_sided": binomtest(only_a, n, 0.5).pvalue if n else float("nan"),
+    }
+
+
+def contrast(effects_dir: str | Path, system: str, other: str, k_c: int,
+             cfg: FrozenConfig, modes: Sequence[bool] = MODES) -> pd.DataFrame:
+    """`label_contrast` of `system` against `other` at one K_c, per ranking mode."""
+    rows = []
+    for condensed in modes:
+        diags = [diagnose(load_stage(effects_dir, s, k_c, condensed), cfg.tau_query)
+                 for s in (system, other)]
+        rows.append({"condensed": condensed, "system_a": system, "system_b": other,
+                     "k_c": k_c, **label_contrast(*diags)})
+    return pd.DataFrame(rows)
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Labels, gating failures, additivity
 # ──────────────────────────────────────────────────────────────────────
@@ -319,6 +361,9 @@ def main() -> None:
     parser.add_argument("--out-dir", default=None,
                         help="default: analysis/<effects-dir name>_<system>_kc<K>")
     parser.add_argument("--n-permutations", type=int, default=10000)
+    parser.add_argument("--contrast-with", default=None, metavar="SYSTEM",
+                        help="also test whether gate-sensitive queries are more frequent "
+                             "under --system than under SYSTEM (paired, exact McNemar)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -327,6 +372,10 @@ def main() -> None:
     out_dir = Path(args.out_dir or Path(cfg.paths.get("analysis", "analysis")) / name)
     start = time.perf_counter()
     result = run(args.effects_dir, args.system, k_c, cfg, out_dir, args.n_permutations)
+    if args.contrast_with:
+        paired = contrast(args.effects_dir, args.system, args.contrast_with, k_c, cfg)
+        paired.to_csv(out_dir / f"contrast_vs_{args.contrast_with}.csv", index=False)
+        logger.info("contrast:\n%s", paired.to_string(index=False))
 
     write_manifest(out_dir / "analysis_manifest.json", run_manifest(
         cfg.fingerprint(), owner="shubham", extra={

@@ -155,3 +155,43 @@ def test_run_end_to_end(small_cfg, grid, tmp_path):
         assert set(counts) <= set(QUERY_LABELS)
     assert json.dumps(result["additivity"])
     assert isinstance(result["tables"]["labels"], pd.DataFrame)
+
+
+def _diag(gate_sensitive, queries=("q1", "q2", "q3", "q4", "q5")):
+    return pd.DataFrame({"query_id": list(queries), "condensed": False,
+                         "label": ["gate_sensitive" if q in gate_sensitive
+                                   else "rerank_sensitive" for q in queries]})
+
+
+def test_label_contrast_is_paired():
+    out = analysis.label_contrast(_diag({"q1", "q2", "q3"}), _diag({"q3", "q4"}))
+    assert (out["n_a"], out["n_b"], out["both"], out["only_a"], out["only_b"]) == (3, 2, 1, 2, 1)
+    assert out["p_one_sided"] == pytest.approx(0.5)        # P(X >= 2 | n = 3)
+    assert out["p_two_sided"] == pytest.approx(1.0)
+    five_none = analysis.label_contrast(_diag({"q1", "q2", "q3", "q4", "q5"}), _diag(set()))
+    assert five_none["p_one_sided"] == pytest.approx(0.5 ** 5)
+
+
+def test_label_contrast_refuses_unpaired_queries():
+    with pytest.raises(ValueError, match="same queries"):
+        analysis.label_contrast(_diag({"q1"}), _diag({"q1"}, queries=("q1", "q2")))
+
+
+def test_contrast_reads_both_systems_in_each_mode(small_cfg, grid, tmp_path):
+    from shared.schema import save
+    queries, settings = grid
+    weaker = synthetic_inputs(synthetic_frame(small_cfg, "strong_stages", n_queries=8))
+    for system, qs in (("a", queries), ("b", weaker)):
+        st = replace(settings, stage1_system=system)
+        for condensed in MODES:
+            save(run_worlds(qs, 50, st, condensed=condensed),
+                 tmp_path / f"{analysis.table_name(system, 50, None, condensed)}.parquet",
+                 "effect")
+    out = analysis.contrast(tmp_path, "a", "b", 50, small_cfg)
+    assert list(out["condensed"]) == list(MODES)
+    assert (out["n_queries"] == len(queries)).all()
+    for _, row in out.iterrows():
+        diag = [analysis.diagnose(analysis.load_stage(tmp_path, s, 50, row["condensed"]),
+                                  small_cfg.tau_query) for s in ("a", "b")]
+        assert row["n_a"] == (diag[0]["label"] == "gate_sensitive").sum()
+        assert row["n_b"] == (diag[1]["label"] == "gate_sensitive").sum()

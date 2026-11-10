@@ -62,7 +62,7 @@ the shared readers refuse a frame holding both.
 
     python -m experiments_shubham.real --system bm25      # ~10 min, ~3.5 GB peak
     python -m experiments_shubham.real --system dpr
-    python -m experiments_shubham.analysis --effects-dir effects/real --system bm25
+    python -m experiments_shubham.analysis --effects-dir effects/real --system bm25 --contrast-with dpr
 
     # one shard, before the others land (~3 min per system for 32 queries):
     python -m experiments_shubham.real --system bm25 \
@@ -136,7 +136,7 @@ with label shares, headline power and both recommendations, to
 
 | file | what it does |
 |---|---|
-| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, H7 (group and continuous tests) per policy and t, and the unjudged share of each world's top-k |
+| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, H7 (group and continuous tests) per policy and t, the unjudged share of each world's top-k, and with `--contrast-with` the paired (exact McNemar) test of whether gate-sensitive queries are more frequent under one Stage-1 system |
 | `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; unjudged shares match a direct count; end-to-end run on a small grid |
 
 It reads only what `engine.run_grid` writes, so it runs unchanged on the real
