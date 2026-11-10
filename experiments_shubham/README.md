@@ -163,3 +163,14 @@ and the additivity figure is drawn per mode (`additivity.png`,
 Query labels use the frozen tau_query, set on the DCG@10 scale, so outside the
 headline setting they are descriptive. H7 is pre-registered at the headline and
 is not recomputed for the sensitivity settings.
+
+## Qualitative figure: real gating failures (Week 4)
+
+| file | what it does |
+|---|---|
+| `gating_examples.py` | `select` applies a rule fixed before the full run (worst failure per query, largest losses first, 3 queries, headline K_c, uncondensed) and lists the passage ids to fetch; `render` writes the examples with their text |
+| `tests/test_gating_examples.py` | the toy failure is selected; worst per query, largest first; passages Stage 1 never returned are flagged as such |
+
+    python -m experiments_shubham.gating_examples select --effects-dir effects/real --system bm25
+    # passage text for analysis/gating_examples/doc_ids.txt (the repo has none), then:
+    python -m experiments_shubham.gating_examples render --passages passages.tsv
