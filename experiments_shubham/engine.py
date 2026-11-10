@@ -208,6 +208,16 @@ def grid_t(cfg: FrozenConfig, include_optional_t: bool = False) -> tuple[float, 
     return t_grid
 
 
+def _depths(cfg: FrozenConfig, candidate_depths: Sequence[int] | None) -> tuple[int, ...]:
+    if candidate_depths is None:
+        return tuple(cfg.candidate_depths)
+    unknown = sorted(set(candidate_depths) - set(cfg.candidate_depths))
+    if unknown:
+        raise ValueError(f"K_c {unknown} not in the frozen candidate depths "
+                         f"{list(cfg.candidate_depths)}")
+    return tuple(k for k in cfg.candidate_depths if k in set(candidate_depths))
+
+
 def iter_grid(
     queries: Sequence[QueryInputs],
     cfg: FrozenConfig,
@@ -216,6 +226,7 @@ def iter_grid(
     include_optional_t: bool = False,
     strict: bool = True,
     modes: Sequence[bool] = MODES,
+    candidate_depths: Sequence[int] | None = None,
 ) -> Iterator[GridTable]:
     """
     Every K_c, and for world D every policy and seed, one table at a time, in
@@ -223,12 +234,14 @@ def iter_grid(
 
     One table per (K_c, mode) for the stage effects and per (K_c, policy,
     mode) for the budget effects keeps each one small enough to validate in
-    memory.
+    memory. `candidate_depths` narrows the grid to some of the frozen depths;
+    it is a parameter rather than a config edit because changing the config
+    would change its fingerprint.
     """
     budget_for = budget_for or cfg.budget_for
     t_grid = grid_t(cfg, include_optional_t)
     system = settings.stage1_system
-    for k_c in cfg.candidate_depths:
+    for k_c in _depths(cfg, candidate_depths):
         for condensed in modes:
             stage = run_worlds(queries, k_c, settings, strict, condensed)
             yield GridTable(table_name(system, k_c, None, condensed), k_c, None,
@@ -251,6 +264,7 @@ def run_grid(
     strict: bool = True,
     extra_manifest: Mapping | None = None,
     modes: Sequence[bool] = MODES,
+    candidate_depths: Sequence[int] | None = None,
 ) -> dict[str, Path]:
     """The whole grid, written one validated Parquet file per table."""
     out_dir = Path(out_dir)
@@ -261,8 +275,9 @@ def run_grid(
     written: dict[str, Path] = {}
     summaries = []
     start = time.perf_counter()
+    depths = _depths(cfg, candidate_depths)
     for table in iter_grid(queries, cfg, settings, budget_for, include_optional_t,
-                           strict, modes):
+                           strict, modes, depths):
         path = out_dir / f"{table.name}.parquet"
         written[table.name] = save(table.effects, path, "effect", strict)
         summaries.append(summarise(table.effects))
@@ -274,8 +289,8 @@ def run_grid(
 
     manifest = run_manifest(cfg.fingerprint(), owner="shubham", extra={
         "stage1_system": system, "n_queries": len(queries),
-        "candidate_depths": list(cfg.candidate_depths),
-        "budgets": {k: budget_for(k) for k in cfg.candidate_depths},
+        "candidate_depths": list(depths),
+        "budgets": {k: budget_for(k) for k in depths},
         "t_grid": list(t_grid), "policies": list(cfg.outsider_policies),
         "seeds": list(cfg.budget_seeds), "k": settings.k, "utility": settings.utility,
         "strict": strict, "condensed_modes": list(modes),

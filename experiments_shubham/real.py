@@ -44,6 +44,16 @@ run, and the manifest records the subset:
     python -m experiments_shubham.real --system bm25 \
         --cache cache/stage2_shard_shubham.sqlite \
         --queries-from cache/stage2_shard_shubham_manifest.json
+
+`--utility` and `--k` run the Week-4 sensitivity grids: the outcome kinds in
+`utility.sensitivity_kinds` and the cutoffs in `cascade.cutoff_sensitivity`,
+nothing else, so a sensitivity setting cannot be chosen after the fact. Each
+setting writes to its own directory (`effects/real_topk_k10`,
+`effects/real_dcg_k5`, ...) because the table names do not carry the utility.
+`--k-c` narrows the grid to some of the frozen candidate depths:
+
+    python -m experiments_shubham.real --system bm25 --utility rbp --k-c 100
+    python -m experiments_shubham.real --system bm25 --k 5 --k-c 100
 """
 
 from __future__ import annotations
@@ -52,6 +62,7 @@ import argparse
 import hashlib
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -186,6 +197,7 @@ def check_allocations(
     cfg: FrozenConfig,
     published_path: str | Path,
     query_ids: Sequence[str] | None = None,
+    candidate_depths: Sequence[int] | None = None,
 ) -> dict:
     """
     Compare world D's selected outsiders with the published allocations.
@@ -202,7 +214,7 @@ def check_allocations(
     if query_ids is not None:
         published = published[published["query_id"].isin({str(q) for q in query_ids})]
     n_checked, mismatched = 0, []
-    for k_c in cfg.candidate_depths:
+    for k_c in candidate_depths or cfg.candidate_depths:
         for policy in cfg.outsider_policies:
             seed_free = policy != RANDOM
             pub = published[(published["k_c"] == k_c) & (published["policy"] == policy)]
@@ -221,6 +233,14 @@ def check_allocations(
     return {"published": str(published_path), "n_allocations": n_checked,
             "n_mismatched": len(mismatched), "examples": mismatched[:5],
             "ok": n_checked > 0 and not mismatched}
+
+
+def effects_dir_name(cfg: FrozenConfig, utility: str, k: int, subset: bool) -> str:
+    """`real`, `real_preview`, or either with `_<utility>_k<k>` for a sensitivity setting."""
+    name = "real_preview" if subset else "real"
+    if (utility, k) != (cfg.utility_kind, cfg.final_cutoff_k):
+        name += f"_{utility}_k{k}"
+    return name
 
 
 def _published_fingerprint(published_path: Path) -> str | None:
@@ -249,12 +269,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out-dir", default=None,
                         help="default: <paths.effects>/real, or real_preview for a subset")
     parser.add_argument("--include-optional-t", action="store_true")
+    parser.add_argument("--utility", default=None,
+                        help="default: utility.kind; otherwise one of utility.sensitivity_kinds")
+    parser.add_argument("--k", type=int, default=None,
+                        help="default: cascade.final_cutoff_k; otherwise one of "
+                             "cascade.cutoff_sensitivity")
+    parser.add_argument("--k-c", type=int, nargs="+", default=None,
+                        help="only these frozen candidate depths (default: all)")
     args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
     paths = cfg.paths
     if args.system not in cfg.stage1_systems:
         parser.error(f"--system must be one of {list(cfg.stage1_systems)}")
+    utility = args.utility or cfg.utility_kind
+    if utility not in (cfg.utility_kind, *cfg.sensitivity_kinds):
+        parser.error(f"--utility must be {cfg.utility_kind} or one of "
+                     f"{list(cfg.sensitivity_kinds)}")
+    k = args.k or cfg.final_cutoff_k
+    if k not in (cfg.final_cutoff_k, *cfg.cutoff_sensitivity):
+        parser.error(f"--k must be {cfg.final_cutoff_k} or one of "
+                     f"{list(cfg.cutoff_sensitivity)}")
+    if args.k_c and not set(args.k_c) <= set(cfg.candidate_depths):
+        parser.error(f"--k-c must be among {list(cfg.candidate_depths)}")
     model = args.model or cfg.reranker_model
     cache_path = Path(args.cache or paths.get("cache", "cache/stage2.sqlite"))
     if not cache_path.exists():
@@ -277,12 +314,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         cfg, args.system, cache, model, universe_path,
         args.tables_dir or paths.get("data", "data"), args.qrels or cfg.qrels_file,
         query_ids=subset)
-    default_dir = "real" if subset is None else "real_preview"
-    out_dir = Path(args.out_dir or Path(paths.get("effects", "effects")) / default_dir)
+    headline = (utility, k) == (cfg.utility_kind, cfg.final_cutoff_k)
+    out_dir = Path(args.out_dir or Path(paths.get("effects", "effects"))
+                   / effects_dir_name(cfg, utility, k, subset is not None))
+    settings = replace(EffectSettings.from_config(cfg, args.system), utility=utility, k=k)
     written = run_grid(
-        queries, cfg, EffectSettings.from_config(cfg, args.system), out_dir,
-        include_optional_t=args.include_optional_t,
+        queries, cfg, settings, out_dir,
+        include_optional_t=args.include_optional_t, candidate_depths=args.k_c,
         extra_manifest={
+            "headline_setting": headline,
             "source": "real", "universe": str(universe_path),
             "alternative_system": alternative_system(cfg, args.system),
             "stage2_model": model, "stage2_cache": str(cache_path),
@@ -293,7 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
     )
 
-    check = check_allocations(out_dir, args.system, cfg, published, subset)
+    check = check_allocations(out_dir, args.system, cfg, published, subset, args.k_c)
     manifest = read_manifest(written["manifest"])
     manifest["allocation_check"] = check
     write_manifest(written["manifest"], manifest)

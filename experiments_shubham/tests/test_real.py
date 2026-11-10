@@ -251,3 +251,35 @@ def test_main_runs_one_shard_and_checks_only_its_allocations(
     assert manifest["allocation_check"]["n_allocations"] == full // 2
     stage = pd.read_parquet(artefacts / "effects" / "bm25_stage_kc20.parquet")
     assert sorted(stage["query_id"].unique()) == shard
+
+
+def test_sensitivity_settings_get_their_own_directory(small_cfg):
+    assert real.effects_dir_name(small_cfg, "dcg", 10, subset=False) == "real"
+    assert real.effects_dir_name(small_cfg, "dcg", 10, subset=True) == "real_preview"
+    assert real.effects_dir_name(small_cfg, "topk", 10, subset=False) == "real_topk_k10"
+    assert real.effects_dir_name(small_cfg, "dcg", 5, subset=True) == "real_preview_dcg_k5"
+
+
+@pytest.mark.parametrize("utility,k", [("topk", 10), ("rbp", 10), ("dcg", 5), ("dcg", 20)])
+def test_main_runs_a_sensitivity_setting_at_one_depth(small_cfg, small_cfg_path, artefacts,
+                                                      utility, k):
+    argv = _argv(small_cfg_path, artefacts) + ["--utility", utility, "--k", str(k),
+                                               "--k-c", "50"]
+    assert real.main(argv) == 0
+    out = artefacts / "effects"
+    manifest = read_manifest(out / "bm25_manifest.json")
+    assert manifest["utility"] == utility and manifest["k"] == k
+    assert manifest["candidate_depths"] == [50]
+    assert manifest["headline_setting"] is False
+    assert manifest["allocation_check"]["ok"]
+    assert manifest["allocation_check"]["n_allocations"] == 4 * 3 * 5
+    assert sorted(p.name for p in out.glob("*_stage_*.parquet")) == [
+        "bm25_stage_kc50.parquet", "bm25_stage_kc50_condensed.parquet"]
+    stage = pd.read_parquet(out / "bm25_stage_kc50.parquet")
+    assert set(stage["utility"]) == {utility} and set(stage["k"]) == {k}
+
+
+@pytest.mark.parametrize("flag", [["--utility", "ndcg"], ["--k", "7"], ["--k-c", "30"]])
+def test_main_refuses_settings_outside_the_frozen_config(small_cfg_path, artefacts, flag):
+    with pytest.raises(SystemExit):
+        real.main(_argv(small_cfg_path, artefacts) + flag)

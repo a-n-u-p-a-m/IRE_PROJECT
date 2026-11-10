@@ -147,3 +147,19 @@ and the additivity figure is drawn per mode (`additivity.png`,
 
     python -m experiments_shubham.engine --regime weak_retriever
     python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever --system synthetic
+
+## Sensitivity and the BM25-vs-DPR comparison (Week 4)
+
+| file | what it does |
+|---|---|
+| `real.py --utility/--k/--k-c` | the sensitivity grids: only the frozen kinds (`utility.sensitivity_kinds`: top-k, RBP) and cutoffs (`cascade.cutoff_sensitivity`: 5, 20), each into its own directory (`effects/real_topk_k10`, `effects/real_dcg_k5`, ...) |
+| `compare.py` | per (system, K_c, utility, k, mode): mean utility, G_q, R_q, query labels, reranker-harms, gating failures and mean Δ per (policy, t); then BM25 and DPR side by side, one axis away from the headline at a time |
+| `tests/test_compare.py` | only controlled comparisons survive, missing settings are reported rather than invented, headline numbers equal the diagnosis |
+
+    # after the headline run (effects/real), the four sensitivity settings at the headline K_c:
+    python -m experiments_shubham.real --system bm25 --utility topk --k-c 100     # and rbp, --k 5, --k 20; and dpr
+    python -m experiments_shubham.compare        # -> analysis/compare/compare_one_axis.csv
+
+Query labels use the frozen tau_query, set on the DCG@10 scale, so outside the
+headline setting they are descriptive. H7 is pre-registered at the headline and
+is not recomputed for the sensitivity settings.
