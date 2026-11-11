@@ -402,3 +402,121 @@ class TestSyntheticPipeline:
         # May be empty if no test queries, but should not raise
         if not fid.empty:
             assert "effect_type" in fid.columns
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Throughput Tokenizer Wrapper Tests
+# ──────────────────────────────────────────────────────────────────────
+
+class TestThroughputTokenizerWrapper:
+    def test_tokenizer_wrapper_records_widths(self):
+        """Verify TokenizerWrapper intercepts __call__ and logs tensor width."""
+        from experiments_chaitanya.throughput import TokenizerWrapper
+
+        class FakeTensor:
+            def __init__(self, shape):
+                self.shape = shape
+
+        class FakeTokenizerOutput:
+            def __init__(self, width):
+                self.input_ids = FakeTensor((1, width))
+
+        class FakeTokenizer:
+            def __init__(self):
+                self.pad_token_id = 42
+
+            def __call__(self, texts, **kwargs):
+                w = max(len(t) for t in texts)
+                return FakeTokenizerOutput(w)
+
+        widths = []
+        raw_tok = FakeTokenizer()
+        wrapped = TokenizerWrapper(raw_tok, widths)
+
+        # Attribute pass-through
+        assert wrapped.pad_token_id == 42
+        wrapped.pad_token_id = 99
+        assert raw_tok.pad_token_id == 99
+
+        # Call interception
+        out = wrapped(["short", "longest sentence"])
+        assert hasattr(out, "input_ids")
+        assert len(widths) == 1
+        assert widths[0] == len("longest sentence")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Merge Cache Tests
+# ──────────────────────────────────────────────────────────────────────
+
+class TestMergeCache:
+    def test_load_shard_manifest_missing_returns_empty(self, tmp_path):
+        from experiments_chaitanya.merge_cache import _load_shard_manifest
+        res = _load_shard_manifest("nonexistent", tmp_path)
+        assert res == {}
+
+    def test_load_shard_manifest_existing(self, tmp_path):
+        import json
+        from experiments_chaitanya.merge_cache import _load_shard_manifest
+        p = tmp_path / "stage2_shard_anupam_manifest.json"
+        p.write_text(json.dumps({"digest": "abc123", "owner": "anupam"}))
+        res = _load_shard_manifest("anupam", tmp_path)
+        assert res["digest"] == "abc123"
+
+    def test_merge_from_integration(self, tmp_path):
+        from shared.cache import Stage2Cache
+        from experiments_chaitanya.merge_cache import EXPECTED_ROWS
+
+        assert EXPECTED_ROWS == 872_455
+
+        # Create two small shard caches
+        s1_path = tmp_path / "s1.sqlite"
+        s2_path = tmp_path / "s2.sqlite"
+        prim_path = tmp_path / "primary.sqlite"
+
+        s1 = Stage2Cache(s1_path)
+        s1.put_many("test-model", [("q1", "d1", 0.9), ("q1", "d2", 0.8)])
+
+        s2 = Stage2Cache(s2_path)
+        s2.put_many("test-model", [("q2", "d3", 0.7), ("q2", "d4", 0.6)])
+
+        primary = Stage2Cache(prim_path)
+        added1 = primary.merge_from(s1_path, "test-model")
+        added2 = primary.merge_from(s2_path, "test-model")
+        assert added1 == 2
+        assert added2 == 2
+        assert primary.count("test-model") == 4
+        # Idempotent re-merge: count does not increase
+        primary.merge_from(s1_path, "test-model")
+        assert primary.count("test-model") == 4
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Real Predictor Split Loading Tests
+# ──────────────────────────────────────────────────────────────────────
+
+class TestRealPredictorsSplit:
+    def test_load_query_split_json(self, tmp_path):
+        import json
+        from experiments_chaitanya.run_real_predictors import _load_query_split
+        split_file = tmp_path / "split.json"
+        split_file.write_text(json.dumps({
+            "train": ["q1", "q2"],
+            "val": ["q3"],
+            "test": ["q4", "q5"]
+        }))
+        loaded = _load_query_split(split_file)
+        assert loaded["train"] == {"q1", "q2"}
+        assert loaded["val"] == {"q3"}
+        assert loaded["test"] == {"q4", "q5"}
+
+    def test_load_query_split_dir(self, tmp_path):
+        from experiments_chaitanya.run_real_predictors import _load_query_split
+        (tmp_path / "train.txt").write_text("q1\nq2\n")
+        (tmp_path / "val.txt").write_text("q3\n")
+        (tmp_path / "test.txt").write_text("q4\nq5\n")
+        loaded = _load_query_split(tmp_path)
+        assert loaded["train"] == {"q1", "q2"}
+        assert loaded["val"] == {"q3"}
+        assert loaded["test"] == {"q4", "q5"}
+

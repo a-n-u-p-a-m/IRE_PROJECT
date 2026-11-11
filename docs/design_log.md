@@ -772,3 +772,66 @@ is narrowed here to bm25.
 ---
 
 <!-- next entry below -->
+
+---
+
+### 2026-11-11 — Hashing: final go/no-go decision — OUT (Chaitanya)
+
+Decision: `hashing.enabled` stays `false`.  One paragraph will appear in the
+Week-4 prediction/cost section explaining why.
+
+**All four written criteria were reviewed at the Week-2 meeting and none were
+fully satisfied by any candidate approach:**
+
+| Criterion | Required | Status |
+|---|---|---|
+| 1. Method pre-specified | `hashing.method` ≠ null before any code | Not committed — no method was agreed before the fill |
+| 2. Representation source independent of MiniLM | BM25 TF, DPR embeddings, or separate neural hash | Not specified — DPR embeddings are plausible but were not committed |
+| 3. Bit-width pre-specified | `hashing.bits` set before any experiments | Not committed |
+| 4. Within-stratum fidelity clears membership baseline on test queries | ≥ 2 of 3 effect types improved | Untested — cannot be evaluated without (1)–(3) |
+
+**Rationale for firm close-out:** Criteria 1–3 form a logical dependency chain;
+4 cannot be evaluated without them.  Keeping hashing nominally "open" while
+doing the Week-4 predictor runs would create pressure to retrofit a method post
+hoc, which Criterion 1 explicitly prohibits.  The conventional-feature
+predictors carry the prediction section on their own, as designed.
+
+**Report paragraph (verbatim, to be inserted in Chaitanya's prediction/cost
+section):**
+
+> Hashing features were not included. The go/no-go criteria required a
+> concrete method specified in `config/base.yaml` before any hashing code was
+> written, a representation source independent of the Stage-2 model, a
+> pre-specified bit-width, and a within-stratum fidelity improvement over the
+> membership-only baseline on held-out queries. At the Week-2 decision meeting
+> none of the four criteria were fully satisfied (method, representation source
+> and bit-width were not pre-specified in the config freeze), so
+> `hashing.enabled` remained `false`. All prediction results use conventional
+> features only.
+
+---
+
+### 2026-11-11 — Throughput tokenizer instrumentation fix (Chaitanya)
+
+**Bug:** `throughput.py` attempted to intercept the AutoTokenizer's
+`__call__` by setting `tokenizer.__call__ = _patched_tokenize` on the
+*instance*.  Python resolves dunder methods on the *type*, never the instance,
+so this assignment was silently ignored and `padded_widths` stayed empty.  The
+`except Exception: pass` guard hid the absence of an error, so the code
+reported success while doing nothing.
+
+**Fix (committed in this entry's commit):** Instead of patching an attribute
+on the existing tokenizer object, the code now wraps the tokenizer in a
+`_TokenizerWrapper` proxy whose *class* defines `__call__`.  After measuring,
+`inner.tokenizer` is restored to the original object.  The fix is confined to
+`experiments_chaitanya/throughput.py` and does not affect any cached score or
+any effect computation — it is instrumentation only.
+
+**Impact on existing results:** None.  The fallback (word_count × 1.3
+estimate) was always used in Colab, and the reported `pairs_per_second` and
+`estimated_hours` are unaffected.  The fix makes the `mean_padded_tensor_width`
+field accurate for future runs.
+
+---
+
+<!-- next entry below -->

@@ -112,6 +112,29 @@ def _make_synthetic_passages(n: int, seed: int = 42) -> tuple[list[str], list[st
     return doc_ids, passages
 
 
+class TokenizerWrapper:
+    """Thin proxy that records the padded sequence width per batch."""
+    __slots__ = ("_tok", "_widths")
+
+    def __init__(self, tok, widths: list[int]):
+        object.__setattr__(self, "_tok", tok)
+        object.__setattr__(self, "_widths", widths)
+
+    def __call__(self, *args, **kwargs):
+        tok = object.__getattribute__(self, "_tok")
+        widths = object.__getattribute__(self, "_widths")
+        result = tok(*args, **kwargs)
+        if hasattr(result, "input_ids"):
+            widths.append(int(result.input_ids.shape[-1]))
+        return result
+
+    def __getattr__(self, name: str):
+        return getattr(object.__getattribute__(self, "_tok"), name)
+
+    def __setattr__(self, name: str, value):
+        setattr(object.__getattribute__(self, "_tok"), name, value)
+
+
 def measure_throughput(
     query_text: str,
     doc_ids: list[str],
@@ -156,29 +179,23 @@ def measure_throughput(
     if n_total == 0:
         raise ValueError("passages must be non-empty")
 
-    # Instrument the tokeniser to capture actual padded widths
+    # Instrument the tokeniser to capture actual padded widths.
+    # NOTE: dunder methods are resolved on the *type*, never the instance, so
+    # ``tokenizer.__call__ = fn`` on a live object is silently ignored by the
+    # Python runtime. The fix is to wrap the tokenizer in a proxy object whose
+    # class defines __call__; the sentence-transformers pipeline calls
+    # self.tokenizer(...) which then dispatches through the wrapper's type.
     padded_widths: list[int] = []
-    _original_tokenize = None
+    inner = None          # the sentence-transformers CrossEncoder instance
+    _orig_tokenizer = None  # holds the real tokenizer so we can restore it
 
     try:
-        import torch
-        # sentence-transformers exposes the AutoTokenizer on the underlying module
-        tokenizer = None
         if hasattr(reranker, "_model") and reranker._model is not None:
             inner = reranker._model
-            if hasattr(inner, "tokenizer"):
-                tokenizer = inner.tokenizer
 
-        def _patched_tokenize(query_passages, **kwargs):
-            result = _original_tokenize(query_passages, **kwargs)
-            if hasattr(result, "input_ids"):
-                w = result.input_ids.shape[-1]
-                padded_widths.append(int(w))
-            return result
-
-        if tokenizer is not None:
-            _original_tokenize = tokenizer.__call__
-            tokenizer.__call__ = _patched_tokenize
+        if inner is not None and hasattr(inner, "tokenizer"):
+            _orig_tokenizer = inner.tokenizer
+            inner.tokenizer = TokenizerWrapper(_orig_tokenizer, padded_widths)
     except Exception:
         pass  # instrumentation is best-effort; report falls back to estimate
 
@@ -194,9 +211,9 @@ def measure_throughput(
     scores = reranker.score_many(query_text, passages, doc_ids)
     elapsed = time.perf_counter() - t0
 
-    # Restore original tokenizer call
-    if _original_tokenize is not None and tokenizer is not None:
-        tokenizer.__call__ = _original_tokenize
+    # Restore original tokenizer
+    if inner is not None and _orig_tokenizer is not None:
+        inner.tokenizer = _orig_tokenizer
 
     pairs_per_second = n_total / max(elapsed, 1e-9)
 
