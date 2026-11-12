@@ -80,44 +80,39 @@ def _load_query_split(split_path: Path | str) -> dict[str, set]:
     )
 
 
-def _effect_files_for_system(effects_dir: Path, system: str) -> list[Path]:
-    """Return all effect parquet files for a given stage1 system."""
-    # real.py writes one file per (k_c, policy) with naming:
-    # e_rerank_{system}_kc{K}.parquet / e_gate_{system}_kc{K}.parquet / ...
-    # or grouped in subdirectories — be flexible.
-    hits = list(effects_dir.glob(f"*{system}*.parquet"))
-    if not hits:
-        # Try any parquet; filter by system column later
-        hits = list(effects_dir.glob("*.parquet"))
-    return hits
+def _headline_effect_path(effects_dir: Path, system: str, k_c: int) -> Path:
+    """
+    Return the headline uncondensed effect parquet for *system* at *k_c*.
+
+    real.py names files ``{system}_stage_kc{K}.parquet`` (uncondensed) and
+    ``{system}_stage_kc{K}_condensed.parquet``.  Freeze-v2 forbids mixing
+    condensed and uncondensed rows in the same predictor run, so we load
+    only the uncondensed headline file here.
+    """
+    return effects_dir / f"{system}_stage_kc{k_c}.parquet"
 
 
 def _load_effects(effects_dir: Path, system: str, cfg) -> pd.DataFrame:
-    """Load, filter, and concatenate effect tables for one system."""
-    files = _effect_files_for_system(effects_dir, system)
-    if not files:
+    """
+    Load the headline uncondensed effect table for *system*.
+
+    Only ``{system}_stage_kc{K_c}.parquet`` is loaded (K_c = first entry of
+    cfg.candidate_depths, the same depth used throughout the pipeline).
+    Loading all 24 BM25 tables at once would mix condensed/uncondensed modes
+    (forbidden by freeze-v2) and exhaust RAM on the full 97-query run.
+    """
+    k_c = cfg.candidate_depths[0]  # headline depth, e.g. 100
+    path = _headline_effect_path(effects_dir, system, k_c)
+    if not path.exists():
         raise FileNotFoundError(
-            f"No effect parquet files found for system={system!r} in {effects_dir}. "
-            "Run `python -m experiments_shubham.real --system {system}` first."
+            f"Headline effect table not found: {path}. "
+            f"Run `python -m experiments_shubham.real --system {system}` first."
         )
-    frames = []
-    for f in files:
-        try:
-            df = pd.read_parquet(f)
-            if "stage1_system" in df.columns:
-                df = df[df["stage1_system"] == system]
-            elif "system" in df.columns:
-                df = df[df["system"] == system]
-            frames.append(df)
-        except Exception as exc:
-            logger.warning("skipping %s: %s", f, exc)
-    if not frames:
-        raise RuntimeError(f"No valid effect data loaded for system={system!r}")
-    effects = pd.concat(frames, ignore_index=True)
+    effects = pd.read_parquet(path)
     effects["query_id"] = effects["query_id"].astype(str)
     effects["doc_id"] = effects["doc_id"].astype(str)
-    logger.info("loaded %d effect rows for system=%s from %d files",
-                len(effects), system, len(frames))
+    logger.info("loaded %d effect rows for system=%s from %s",
+                len(effects), system, path.name)
     return effects
 
 
@@ -127,55 +122,76 @@ def _build_features_from_cache(
     cfg,
     system: str,
     universe_path: Path,
+    s1_tables_dir: Path,
 ) -> pd.DataFrame:
     """
     Build feature table from the merged Stage-2 cache and the universe.
 
     Uses experiments_chaitanya.features.extract_stage1_features and
     extract_stage2_features; records generation_seconds and peak memory.
+
+    Parameters
+    ----------
+    effects:
+        Headline uncondensed effect table (output of _load_effects).
+    cache_path:
+        Path to the merged cache/stage2.sqlite.
+    cfg:
+        Loaded FrozenConfig.
+    system:
+        "bm25" or "dpr".
+    universe_path:
+        Path to data/universe.parquet.
+    s1_tables_dir:
+        Directory containing stage1_over_universe_{system}.parquet
+        (normally ``data/``).
     """
     import tracemalloc
 
     from shared.cache import Stage2Cache
-    from shared.universe import load_frozen
+    from shared.schema import load as schema_load
 
     from experiments_chaitanya.features import (
         extract_stage1_features,
         extract_stage2_features,
     )
 
-    # Load universe and run table
-    universe = load_frozen(str(universe_path), fingerprint=cfg.fingerprint())
     model = cfg.reranker_model
     cache = Stage2Cache(cache_path)
-
-    # Build a minimal run table from the effect table (we need stage1 rank/score)
-    run_cols = ["query_id", "doc_id", "stage1_system", "stage1_rank", "stage1_score",
-                "k_c", "checkpoint"]
-    available = [c for c in run_cols if c in effects.columns]
-    run_df = effects[available].drop_duplicates(["query_id", "doc_id"]).copy()
-
-    # Rename for feature extractor compatibility
-    rename = {}
-    if "stage1_system" in run_df.columns:
-        rename["stage1_system"] = "system"
-    if "stage1_rank" in run_df.columns:
-        rename["stage1_rank"] = "rank"
-    if "stage1_score" in run_df.columns:
-        rename["stage1_score"] = "score"
-    if rename:
-        run_df = run_df.rename(columns=rename)
-    if "system" not in run_df.columns:
-        run_df["system"] = system
-    if "checkpoint" not in run_df.columns:
-        run_df["checkpoint"] = cfg.reranker_model
-
     k_c = cfg.candidate_depths[0]  # headline depth
+
+    # ---- Stage-1 features ------------------------------------------------
+    # effect tables do NOT carry stage1_rank / stage1_score; we must pull
+    # them from data/stage1_over_universe_{system}.parquet.
+    s1_path = s1_tables_dir / f"stage1_over_universe_{system}.parquet"
+    if not s1_path.exists():
+        raise FileNotFoundError(
+            f"{s1_path} not found. "
+            "Run `python -m experiments_anupam.stage1_over_universe` first."
+        )
+    s1_table = schema_load(s1_path, "run")
+    s1_table = s1_table[s1_table["system"] == system].copy()
+    s1_table["query_id"] = s1_table["query_id"].astype(str)
+    s1_table["doc_id"] = s1_table["doc_id"].astype(str)
+    # Restrict to the effect-table query/doc pairs
+    effect_pairs = effects[["query_id", "doc_id"]].drop_duplicates()
+    run_df = effect_pairs.merge(s1_table, on=["query_id", "doc_id"], how="left")
+    if "checkpoint" not in run_df.columns:
+        run_df["checkpoint"] = model
+
+    # ---- Stage-2 features ------------------------------------------------
+    # extract_stage2_features signature: (cache, query_ids, survivor_doc_ids_per_query, model)
+    # C_q survivors = documents with rank <= k_c in the stage1 run.
+    survivors: dict[str, list[str]] = {
+        str(q): sorted(g["doc_id"].astype(str).tolist())
+        for q, g in s1_table[s1_table["rank"] <= k_c].groupby("query_id", observed=True)
+    }
+    query_ids = sorted(effects["query_id"].unique().tolist())
 
     tracemalloc.start()
     t0 = time.perf_counter()
     s1_feats = extract_stage1_features(run_df, system, k_c)
-    s2_feats = extract_stage2_features(universe, cache, model, k_c)
+    s2_feats = extract_stage2_features(cache, query_ids, survivors, model)
     gen_secs = time.perf_counter() - t0
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -195,6 +211,7 @@ def _run_system(
     cfg,
     cache_path: Path,
     universe_path: Path,
+    s1_tables_dir: Path,
     query_split: dict[str, set],
     top_m: int,
     seed: int,
@@ -217,10 +234,10 @@ def _run_system(
     logger.info("system=%s  train=%d queries  test=%d queries",
                 system, train_eff["query_id"].nunique(), test_eff["query_id"].nunique())
 
-    # Build features (needs GPU cache)
+    # Build features (needs Stage-2 cache + stage1_over_universe)
     try:
         feats, gen_secs, peak_bytes = _build_features_from_cache(
-            effects, cache_path, cfg, system, universe_path
+            effects, cache_path, cfg, system, universe_path, s1_tables_dir
         )
         feature_source = "real_cache"
     except Exception as exc:
@@ -228,12 +245,21 @@ def _run_system(
             "Could not build features from cache (%s). "
             "Attempting to use stage1-only features as a fallback.", exc
         )
+        # Fallback: pull stage1 rank/score from stage1_over_universe parquet
+        # (effect tables do not carry these columns).
+        from shared.schema import load as schema_load
         from experiments_chaitanya.features import extract_stage1_features
-        run_df = effects[["query_id", "doc_id"]].drop_duplicates().copy()
-        if "stage1_rank" in effects.columns:
-            run_df["rank"] = effects["stage1_rank"]
-        if "stage1_score" in effects.columns:
-            run_df["score"] = effects["stage1_score"]
+        s1_path = s1_tables_dir / f"stage1_over_universe_{system}.parquet"
+        if s1_path.exists():
+            s1_table = schema_load(s1_path, "run")
+            s1_table = s1_table[s1_table["system"] == system].copy()
+            s1_table["query_id"] = s1_table["query_id"].astype(str)
+            s1_table["doc_id"] = s1_table["doc_id"].astype(str)
+            effect_pairs = effects[["query_id", "doc_id"]].drop_duplicates()
+            run_df = effect_pairs.merge(s1_table, on=["query_id", "doc_id"], how="left")
+        else:
+            logger.warning("%s missing; Stage-1 features will lack rank/score.", s1_path)
+            run_df = effects[["query_id", "doc_id"]].drop_duplicates().copy()
         run_df["system"] = system
         run_df["checkpoint"] = cfg.reranker_model
         k_c = cfg.candidate_depths[0]
@@ -362,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
                 len(query_split.get("val", [])),
                 len(query_split.get("test", [])))
 
+    s1_tables_dir = universe_path.parent  # data/ contains stage1_over_universe_*.parquet
     systems = [args.system] if args.system else list(cfg.stage1_systems)
     t_wall = time.perf_counter()
     system_records = []
@@ -374,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
                 cfg=cfg,
                 cache_path=cache_path,
                 universe_path=universe_path,
+                s1_tables_dir=s1_tables_dir,
                 query_split=query_split,
                 top_m=args.top_m,
                 seed=args.seed,
