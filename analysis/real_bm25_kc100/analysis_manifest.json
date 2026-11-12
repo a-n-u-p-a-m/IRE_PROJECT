@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-11-12T20:08:20+0530",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "shubham",
+  "git_commit": "5808ed1341725ab3615b46a8b1085a0029833718",
+  "python": "3.13.5",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.1.3",
+  "torch": "2.11.0",
+  "cuda": null,
+  "gpu": null,
+  "effects_dir": "effects/real",
+  "system": "bm25",
+  "k_c": 100,
+  "tau_query": 0.05,
+  "tau_document": 0.05,
+  "condensed_modes": [
+    false,
+    true
+  ],
+  "label_counts": {
+    "uncondensed": {
+      "rerank_sensitive": 83,
+      "gate_sensitive": 14
+    },
+    "condensed": {
+      "rerank_sensitive": 81,
+      "gate_sensitive": 16
+    }
+  },
+  "additivity": {
+    "uncondensed": {
+      "n_documents": 795,
+      "share_off_diagonal": 0.8088050314465409,
+      "max_abs_residual": 7.0
+    },
+    "condensed": {
+      "n_documents": 796,
+      "share_off_diagonal": 0.800251256281407,
+      "max_abs_residual": 7.0
+    }
+  },
+  "files": [
+    "additivity.png",
+    "additivity_condensed.png",
+    "budget_outcomes.csv",
+    "contrast_vs_dpr.csv",
+    "diagnosis.csv",
+    "distributions.csv",
+    "gating_failures.csv",
+    "h7.csv",
+    "labels.csv",
+    "unjudged_at_k.csv"
+  ],
+  "seconds": 74.5
+}

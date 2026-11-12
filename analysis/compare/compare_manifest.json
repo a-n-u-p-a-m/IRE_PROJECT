@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-11-12T20:05:26+0530",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "shubham",
+  "git_commit": "5808ed1341725ab3615b46a8b1085a0029833718",
+  "python": "3.13.5",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.1.3",
+  "torch": "2.11.0",
+  "cuda": null,
+  "gpu": null,
+  "effects_dirs": {
+    "dcg@10": "effects/real",
+    "topk@10": "effects/real_topk_k10",
+    "rbp@10": "effects/real_rbp_k10",
+    "dcg@5": "effects/real_dcg_k5",
+    "dcg@20": "effects/real_dcg_k20"
+  },
+  "missing_settings": [],
+  "systems": [
+    "bm25",
+    "dpr"
+  ],
+  "headline": {
+    "k_c": 100,
+    "utility": "dcg",
+    "k": 10,
+    "condensed": false
+  },
+  "tau_query": 0.05
+}
