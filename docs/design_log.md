@@ -708,6 +708,11 @@ statistic now rests on a measurement instead of an argument.
 
 ## 2026-11-10 (later) — DPR has no gate-sensitive queries, and why that is the result
 
+> **SUPERSEDED — see 2026-11-12.** The "zero" below is a 33-query preview
+> artefact. On the full 97 queries dpr has FOUR gate-sensitive queries against
+> bm25's 14. The contrast and the mechanism survive; the absolute does not.
+> Do not quote this entry's headline.
+
 Running the same preview for `dpr` on the same 33 queries gives **0
 gate-sensitive queries** against bm25's 5 (6 condensed). The naive reading -
 "dpr retrieves better, so it discards less" - is wrong, and the committed
@@ -771,8 +776,6 @@ is narrowed here to bm25.
 
 ---
 
-<!-- next entry below -->
-
 ---
 
 ### 2026-11-11 — Hashing: final go/no-go decision — OUT (Chaitanya)
@@ -831,6 +834,89 @@ any effect computation — it is instrumentation only.
 estimate) was always used in Colab, and the reported `pairs_per_second` and
 `estimated_hours` are unaffected.  The fix makes the `mean_padded_tensor_width`
 field accurate for future runs.
+
+---
+
+## 2026-11-12 — CORRECTION: DPR has four gate-sensitive queries, not zero
+
+**The entry dated 2026-11-10 (later) is wrong in its title and in its central
+claim.** It reads "DPR has no gate-sensitive queries, and why that is the
+result". On the full 97 queries DPR has **four**. That entry was written from a
+33-query preview and the zero did not survive.
+
+From the committed manifests, `analysis/real_<system>_kc100/analysis_manifest.json`:
+
+| gate-sensitive | uncondensed | condensed | rerank-sensitive | mixed-stable |
+|---|---|---|---|---|
+| bm25 | **14** / 97 | 16 | 83 | 0 |
+| dpr | **4** / 97 | 3 | 86 | 7 |
+
+Checked before concluding anything: `tau_query` and `tau_document` are both
+0.05 in each run, `k_c` is 100, the fingerprint is `46d0807d8ed3`, and
+`config/base.yaml` has not been modified since the original upload. Nothing
+about the labelling rule changed between the preview and the full run, so the
+difference is sampling and nothing else.
+
+### What the preview got right, and what it got wrong
+
+The caution recorded at the time was correct, and is the only reason this is a
+correction rather than a retraction:
+
+> 0 of 33 is weak alone: under the simulated 5.6% rate, P(0 of 33) = 0.149, so
+> the observation is unsurprising even if dpr's true rate matched bm25's. The
+> claim rests on the CONTRAST.
+
+That is what happened. DPR's observed rate is 4/97 = **4.1%**, close to the
+5.6% the H2 simulation assumed. It was never a zero-rate system; 33 queries
+simply had none. The outlier is bm25 at 14/97 = **14.4%**, about 2.5x the
+simulated rate.
+
+**The mechanism survives, restated quantitatively.** Both retrievers discard
+the same quantity of gain-carrying documents — median 6.0 each at K_c=100, per
+the feasibility run — and bm25's discards cost it gate-sensitivity 3.5x as
+often. That is still the lexical-versus-semantic finding, and still stronger
+than a recall difference, because recall of gainful documents is identical.
+What is no longer available is the clean "DPR discards nothing that matters":
+DPR discards things that matter on four queries in ninety-seven.
+
+**The report must not say "zero".** The contrast is paired — both systems on
+the same 97 queries — so the statistic is the exact McNemar that `analysis.py`
+now implements, reported from `contrast_vs_dpr.csv`; not a rate comparison and
+not Fisher.
+
+A label appears on the full set that the preview never showed: dpr has seven
+`mixed_stable` queries (nine condensed) against the preview's one. A category
+that was nearly invisible at n=33 is 7% of the collection.
+
+### Non-additivity holds at full scale
+
+| | n documents | off-diagonal | max abs residual |
+|---|---|---|---|
+| bm25 uncondensed | 795 | 80.9% | 7.0 |
+| bm25 condensed | 796 | 80.0% | 7.0 |
+| dpr uncondensed | 760 | 79.3% | 7.0 |
+| dpr condensed | 772 | 80.2% | 7.0 |
+
+The preview measured 83.0% on 264 documents; the full run gives 79–81% on
+~780. The finding is unchanged and now rests on three times the evidence. The
+maximum residual is still exactly 7.0, the entire gain of a grade-3 document,
+in all four cells.
+
+### The general lesson, which is why this is written down
+
+A preview on a third of the data reproduced every qualitative conclusion except
+one, and the one it got wrong was the one stated as an absolute. "Zero" is a
+claim a subset cannot support: a rate can be estimated from 33 queries, an
+absence cannot. Preview findings belong in the log as previews, and any
+absolute in one should be read as "none observed yet".
+
+### What this entry does NOT record
+
+The H7 p-values, the McNemar result and the full-run `unjudged_at_k` live in
+`analysis/real_<system>_kc100/*.csv`, which are correctly gitignored. This
+entry records only what the committed manifests carry. Whoever writes the
+results section should put the headline H7 and McNemar figures into a log entry
+of their own, because at present no committed artefact states them.
 
 ---
 
