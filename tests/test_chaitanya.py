@@ -457,6 +457,7 @@ class TestMergeCache:
 
     def test_load_shard_manifest_existing(self, tmp_path):
         import json
+
         from experiments_chaitanya.merge_cache import _load_shard_manifest
         p = tmp_path / "stage2_shard_anupam_manifest.json"
         p.write_text(json.dumps({"digest": "abc123", "owner": "anupam"}))
@@ -464,8 +465,8 @@ class TestMergeCache:
         assert res["digest"] == "abc123"
 
     def test_merge_from_integration(self, tmp_path):
-        from shared.cache import Stage2Cache
         from experiments_chaitanya.merge_cache import EXPECTED_ROWS
+        from shared.cache import Stage2Cache
 
         assert EXPECTED_ROWS == 872_455
 
@@ -498,6 +499,7 @@ class TestMergeCache:
 class TestRealPredictorsSplit:
     def test_load_query_split_json(self, tmp_path):
         import json
+
         from experiments_chaitanya.run_real_predictors import _load_query_split
         split_file = tmp_path / "split.json"
         split_file.write_text(json.dumps({
