@@ -920,4 +920,243 @@ of their own, because at present no committed artefact states them.
 
 ---
 
+## 2026-11-13 — Full-run results on 97 queries: H7, the BM25–DPR contrast, Δ_t, sensitivity (Shubham)
+
+This is the entry the 2026-11-12 correction asked for: the headline numbers,
+written into a committed file so that the report and the video quote one
+source. Everything is K_c = 100, DCG@10, **uncondensed** (the headline mode)
+unless a line says otherwise; condensed is given where it could change a
+reading. Nothing below came from a preview.
+
+**Provenance.** `cache/stage2.sqlite`, 872,455 rows, merged digest
+`b7669b8dde3b328c`; each shard inside it matches its committed digest
+(anupam `9f2cfe600f0e49aa`, shubham `def33b7a41b4f1d0`, chaitanya
+`ab09ad44960cdaf5`) and covers the frozen universe exactly. World D equals the
+published allocations at **4,365 of 4,365** allocations for each system.
+Manifests: `effects/real*/<system>_manifest.json`,
+`analysis/real_<system>_kc100/analysis_manifest.json`,
+`analysis/compare/compare_manifest.json` (commit `7d3b18c`; code at `5808ed1`;
+fingerprint `46d0807d8ed3`). The analysis is deterministic: a second run wrote
+byte-identical CSVs. Their digests are at the end of this entry, so a re-run
+can be checked against these numbers rather than trusted.
+
+### Query labels and the per-query quantities
+
+| | bm25 | dpr |
+|---|---|---|
+| gate-sensitive (condensed) | **14** (16) | **4** (3) |
+| rerank-sensitive (condensed) | 83 (81) | 86 (85) |
+| mixed-stable (condensed) | 0 (0) | 7 (9) |
+| reranker harms the query | 17 | 29 |
+| mean G_q (median) | 1.333 (0.0) | −0.118 (0.0) |
+| queries with G_q > 0 / < 0 | 33 / 26 | 10 / 19 |
+| mean R_q (median) | 6.146 (3.881) | 2.204 (1.431) |
+| mean DCG@10 of the cascade | 14.603 | 16.055 |
+
+G_q is negative more often than positive under dpr: removing the gate admits
+documents the reranker places above the survivors but which carry less gain.
+Part of that is pooling, since unjudged documents count as zero; condensed,
+dpr's mean G_q is −0.022 (9 positive, 16 negative). Paired per query, the dpr cascade has the
+higher DCG@10 on 38 queries, bm25 on 23, and they tie on 36.
+
+### H7 — confirmatory for `alternative`, descriptive for `boundary`
+
+H7 as registered: Δ_t (DCG@10 under the budget world minus the actual cascade)
+is larger for gate-sensitive than for rerank-sensitive queries. Two tests:
+**group** (difference of means, two-sided permutation, 10,000 permutations,
+seed 42) and **continuous** (Spearman of G_q against Δ_t over all 97, one-sided).
+`t` is the share of the Stage-2 budget B = K_c kept for the top of C_q; 1 − t
+goes to outsiders.
+
+**`alternative` (confirmatory)**, uncondensed, groups gate / rerank beside
+every p-value:
+
+| system | t | groups | difference | group p | Spearman rho | rho p |
+|---|---|---|---|---|---|---|
+| bm25 | 0.9 | 14 / 83 | 6.87 | **< 0.001** | 0.854 | < 1e-20 |
+| bm25 | 0.75 | 14 / 83 | 7.68 | **< 0.001** | 0.814 | < 1e-20 |
+| bm25 | 0.5 | 14 / 83 | 8.83 | **< 0.001** | 0.805 | < 1e-20 |
+| dpr | 0.9 | 4 / 86 | 0.55 | 0.084 | 0.124 | 0.11 |
+| dpr | 0.75 | 4 / 86 | 1.46 | 0.039 | 0.087 | 0.20 |
+| dpr | 0.5 | 4 / 86 | 2.49 | **0.0007** | 0.247 | **0.0074** |
+
+Condensed gives the same reading: bm25 at the floor at every t (rho
+0.81–0.87); dpr significant on both tests at t = 0.5 only (group p 0.0005,
+rho 0.249, p 0.0069) and on the group test alone at 0.75 (p 0.035).
+
+**H7 holds for bm25 at every t, in both modes, on both tests. For dpr it
+holds at t = 0.5 on both tests and nowhere else on both.**
+
+**`boundary` (descriptive)**: bm25 is null at t = 0.9 and 0.75 and
+significant at t = 0.5 (group p 0.016, rho 0.232, p 0.011). The two shard
+previews disagreed here (p 0.0035 on anupam's 33, 0.71 on shubham's 32); the
+full run sides with the first. dpr's
+boundary is stronger than bm25's: t = 0.75 rho 0.317 (p 0.0008), t = 0.5
+group p 0.0011 and rho 0.425 (p 7e-6).
+
+**`random` (control)** is null for both systems at every t (group p 0.08–0.88,
+rho between −0.29 and −0.03). That is what makes the `alternative` result mean
+something other than "reranking more documents helps".
+
+Qualifications, which must survive into the report:
+
+  * **Report the floor as `p < 0.001`**, never as 0.0001: with 10,000
+    permutations the smallest achievable p is ~1e-4.
+  * **dpr's group test rests on four queries.** It is valid (the permutation
+    test needs no normality), but one query moves it. Quote the group size
+    with the p-value every time.
+  * **No correction across t was pre-registered.** Under Holm across the
+    three t values, bm25 is unchanged; dpr keeps t = 0.5 only, on both tests
+    (adjusted 0.0021 group, 0.022 continuous). This is a reading aid, not a
+    change to the registered test.
+
+### Δ_t magnitudes
+
+Mean Δ DCG@10 over 97 queries, uncondensed, with the number of queries
+improved / worsened. The median is 0 in every cell: most queries are
+untouched by any budget shift.
+
+| policy | t | bm25 mean | bm25 +/− | dpr mean | dpr +/− |
+|---|---|---|---|---|---|
+| alternative | 0.9 | +1.332 | 35 / 17 | +0.021 | 7 / 7 |
+| alternative | 0.75 | +1.444 | 36 / 20 | +0.019 | 9 / 12 |
+| alternative | 0.5 | +1.075 | 38 / 27 | +0.028 | 16 / 15 |
+| boundary | 0.9 | −0.022 | 12 / 6 | +0.004 | 3 / 3 |
+| boundary | 0.75 | +0.037 | 19 / 15 | −0.017 | 5 / 10 |
+| boundary | 0.5 | −0.371 | 25 / 29 | +0.002 | 10 / 15 |
+| random | 0.9 | −0.071 | 8 / 5 | +0.024 | 5 / 1 |
+| random | 0.75 | −0.208 | 14 / 15 | −0.001 | 9 / 4 |
+| random | 0.5 | −0.753 | 23 / 30 | −0.001 | 14 / 8 |
+
+The bm25 `alternative` gain is carried almost entirely by the gate-sensitive
+queries: their mean Δ is +7.2 / +8.0 / +8.6 at t = 0.9 / 0.75 / 0.5, against
++0.34 / +0.34 / −0.20 for rerank-sensitive queries. Giving away even 10% of
+the budget to dpr's documents buys most of the gain. Under dpr the
+corresponding figures are +0.55 / +1.42 / +2.41 for its four gate-sensitive
+queries and about zero for the rest. These are means of signed per-query
+differences and no pooled statistic is reported, per freeze v2.
+
+### BM25 against DPR, paired — the contrast
+
+Exact McNemar on the gate-sensitive label, same 97 queries under both systems
+(`contrast_vs_dpr.csv`):
+
+| mode | bm25 only | dpr only | both | one-sided p | two-sided p |
+|---|---|---|---|---|---|
+| uncondensed | 13 | 3 | 1 | 0.011 | **0.021** |
+| condensed | 15 | 2 | 1 | 0.0012 | **0.0024** |
+
+The one query gate-sensitive under both is 87452; the three dpr-only ones are
+1037798, 23849 and 405163. **Quote the two-sided p (0.021).** The direction
+was hypothesised on the 33-query preview (2026-11-10, later), and those 33
+queries are inside the 97, so the one-sided test is not a clean confirmation.
+
+The same direction shows elsewhere: bm25's reranker moves more (R_q 6.15
+against 2.20) and harms fewer queries (17 against 29); bm25 has 140 gating
+failures over 49 queries, dpr 21 over 14.
+
+### Unjudged documents in the top 10
+
+Mean share of unjudged documents in each world's top 10 (median 0 throughout):
+
+| world | bm25 | dpr |
+|---|---|---|
+| A (cascade) | 2.06% | 2.78% |
+| B (no rerank: Stage-1 order) | 0.31% | **8.87%** |
+| C (no gate) | 4.02% | 4.02% |
+
+World C is identical for the two systems **by construction**: with no gate it
+reranks all of U_q, which does not depend on the Stage-1 system. 4.02%
+replaces the 3.87% the 65-query preview reported. dpr's Stage-1 top 10 is
+nearly 9% unjudged against bm25's 0.3%, consistent with TREC-DL pools built
+from runs closer to bm25 than to cosDPR. Unjudged documents count as zero
+gain, so this lowers world B under dpr and biases dpr's E_rerank upward. dpr's
+R_q still comes out below bm25's. The condensed mode removes the issue (R_q 1.96)
+and changes no conclusion.
+
+### Strata and document labels
+
+Uncondensed, both systems: 9,700 survivors (97 × 100) and 862,755
+non-survivors. Condensed (judged only): bm25 5,116 / 10,685, dpr 4,723 /
+11,078. bm25's top 100 holds more judged documents than dpr's, consistent
+with the pool bias above.
+
+| | bm25 | dpr |
+|---|---|---|
+| non-survivors with E_gate ≠ 0 | 0.016% | 0.0024% |
+| gating failures (documents) | 140 | 21 |
+| survivors: gate-sensitive / jointly / rerank-sensitive | 10 / 184 / 418 | 3 / 68 / 571 |
+
+### One axis away from the headline (`compare_one_axis.csv`)
+
+**K_c**, DCG@10, uncondensed:
+
+| K_c | bm25 gate-sens. | bm25 mean G_q | bm25 failures (queries) | bm25 Δ alt t=0.5 | dpr gate-sens. | dpr mean G_q | dpr failures (queries) |
+|---|---|---|---|---|---|---|---|
+| 100 | 14 | 1.333 | 140 (49) | +1.075 | 4 | −0.118 | 21 (14) |
+| 500 | 7 | 0.412 | 56 (26) | +0.198 | 1 | −0.129 | 4 (4) |
+| 1000 | 3 | 0.066 | 29 (15) | −0.180 | 0 | −0.060 | 1 (1) |
+
+The gate's cost under bm25 falls by a factor of twenty from K_c = 100 to 1000,
+and the `alternative` gain goes with it. dpr's 0 at K_c = 1000 is a count at a
+different depth, not a reinstatement of the superseded "zero".
+
+**Utility and cutoff** at K_c = 100, gate-sensitive bm25 / dpr: top-k@10
+16 / 3, RBP 13 / 4, DCG@5 13 / 3, DCG@20 18 / 6; condensed 16 / 3. bm25 is
+higher in every setting. These labels use the frozen `tau_query`, which is set
+on the DCG@10 scale, so outside the headline they are descriptive; H7 is
+not recomputed for them.
+
+### The qualitative figure: three real gating failures
+
+Selected by the rule fixed in `gating_examples.py` before the full run (bm25,
+K_c = 100, uncondensed, worst failure per query, largest loss first). In all
+three, a grade-3 passage that would have ranked **first** without the gate was
+cut by bm25:
+
+| query | excluded passage | bm25 rank | ranked first instead |
+|---|---|---|---|
+| 1110199 "what is wifi vs bluetooth" | 3838638, grade 3 | 177 | 8160520, grade 2 |
+| 1114646 "what is famvir prescribed for" | 8117090, grade 3 | not in top 5,000 | 2647994, grade 3 |
+| 1132532 "average annual income data analyst" | 6832789, grade 3 | 151 | 6189364, grade 3 |
+
+E_gate = −7.0 for each is the document's effect, not the query's: in the last
+two the cascade still put a grade-3 passage first. **Unverified:** passage
+8117090 reads "Famvir®", and the raw MS MARCO collection carries mojibake; if
+the index holds a garbled token, the famvir case is an encoding artefact rather
+than a lexical miss. Check the raw text (Colab cell without `ftfy`) before the
+example goes in the report.
+
+### Not here yet
+
+  * **No intervals.** `bootstrap_iterations` / `bootstrap_alpha` have no
+    consumer yet; bootstrap CIs on the headline effects are the next code
+    change to `analysis.py`, and this entry gets a follow-up when they exist.
+  * `headline_metric_gain_map`, candidate-set Recall@K and the
+    `merge_cache.py` completeness flag are open as listed by Anupam on
+    2026-11-12.
+
+### File digests (sha256, first 16 hex)
+
+| file | digest |
+|---|---|
+| `analysis/real_bm25_kc100/h7.csv` | `70289914f6d54a0d` |
+| `analysis/real_bm25_kc100/contrast_vs_dpr.csv` | `fd35c4a5b7ec1241` |
+| `analysis/real_bm25_kc100/budget_outcomes.csv` | `d569aee7be855612` |
+| `analysis/real_bm25_kc100/unjudged_at_k.csv` | `fb9c9d7b7c34a47f` |
+| `analysis/real_bm25_kc100/diagnosis.csv` | `dd947eda4a28b90a` |
+| `analysis/real_dpr_kc100/h7.csv` | `ea018511b179bdac` |
+| `analysis/real_dpr_kc100/contrast_vs_bm25.csv` | `06ad7dad142aa8a2` |
+| `analysis/real_dpr_kc100/budget_outcomes.csv` | `97213dfa51180da5` |
+| `analysis/real_dpr_kc100/unjudged_at_k.csv` | `65b6889c529cd10e` |
+| `analysis/real_dpr_kc100/diagnosis.csv` | `03a47f9c0b5d3260` |
+| `analysis/compare/compare_one_axis.csv` | `87b5acbe972c70c2` |
+| `analysis/gating_examples/examples.csv` | `6e3d18f4bca173e3` |
+
+To regenerate: the commands in `experiments_shubham/README.md` under "Real
+effects", "Sensitivity" and "Qualitative figure", with `cache/stage2.sqlite`
+in place.
+
+---
+
 <!-- next entry below -->
