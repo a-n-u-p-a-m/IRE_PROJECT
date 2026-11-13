@@ -1159,4 +1159,89 @@ in place.
 
 ---
 
+## 2026-11-13 (later) — Bootstrap intervals on the headline numbers (Shubham)
+
+The follow-up the previous entry promised. `analysis.py` now writes
+`intervals.csv` and, with `--contrast-with`, `contrast_intervals_vs_<other>.csv`.
+`predictors.bootstrap_iterations` and `bootstrap_alpha` finally have a
+consumer.
+
+**Method.** Percentile bootstrap over **queries** (`shared.metrics.bootstrap_ci`,
+unchanged), 1,000 resamples, 95%, seed 42. Every statistic is drawn from the
+same 1,000 resamples. Paired system differences resample query **pairs**.
+Each point estimate is the number already in the previous entry. Adding the
+intervals changed none of the existing files: all ten digests recorded there
+still match.
+
+### Per system (K_c = 100, DCG@10, uncondensed; condensed in brackets)
+
+| | bm25 | dpr |
+|---|---|---|
+| mean DCG@10 | 14.60 [13.03, 16.38] | 16.06 [14.40, 17.76] |
+| mean G_q | 1.33 [0.58, 2.23] | −0.12 [−0.44, 0.16] |
+| mean R_q | 6.15 [4.98, 7.31] | 2.20 [1.74, 2.71] |
+| share gate-sensitive | 14.4% [7.2, 21.6] | 4.1% [1.0, 8.2] |
+| share reranker harms | 17.5% [10.3, 24.7] | 29.9% [20.6, 39.2] |
+
+Condensed: bm25 G_q 1.51 [0.77, 2.39], gate-sensitive 16.5% [10.3, 23.7];
+dpr G_q −0.02 [−0.22, 0.20], gate-sensitive 3.1% [0.0, 6.2].
+
+### H7, `alternative`
+
+| system | t | mean Δ | group difference (draws) | Spearman rho |
+|---|---|---|---|---|
+| bm25 | 0.9 | 1.33 [0.67, 2.14] | 6.87 [4.15, 10.15] | 0.854 [0.734, 0.936] |
+| bm25 | 0.75 | 1.44 [0.74, 2.29] | 7.68 [5.05, 10.96] | 0.814 [0.681, 0.915] |
+| bm25 | 0.5 | 1.08 [0.27, 2.00] | 8.83 [6.24, 11.82] | 0.805 [0.671, 0.889] |
+| dpr | 0.9 | 0.02 [−0.09, 0.12] | 0.55 [−0.07, 1.71] (903) | 0.124 [−0.207, 0.470] |
+| dpr | 0.75 | 0.02 [−0.14, 0.22] | 1.46 [−0.64, 5.02] (903) | 0.087 [−0.201, 0.411] |
+| dpr | 0.5 | 0.03 [−0.18, 0.24] | 2.49 [0.40, 5.54] (903) | 0.247 [−0.025, 0.504] |
+
+For bm25 every interval excludes zero, at every t, in both modes. For dpr the
+group difference excludes zero at t = 0.5 only, and the mean gain from the
+policy is indistinguishable from zero at every t.
+
+### BM25 minus DPR, paired
+
+| | uncondensed | condensed |
+|---|---|---|
+| share gate-sensitive | +10.3 pp [2.1, 18.6] | +13.4 pp [6.2, 21.6] |
+| share reranker harms | −12.4 pp [−22.7, −2.0] | −13.4 pp [−23.7, −3.1] |
+| mean R_q | +3.94 [2.71, 5.18] | +4.20 [2.98, 5.44] |
+| mean DCG@10 | −1.45 [−2.32, −0.71] | −1.53 [−2.37, −0.81] |
+| mean G_q | +1.45 [0.71, 2.32] | +1.53 [0.81, 2.37] |
+
+### How to read them, which the report must keep
+
+  * **The G_q and DCG rows are one finding, not two.** World C ranks all of
+    U_q by the reranker and does not depend on the Stage-1 system, so per
+    query G_q(bm25) − G_q(dpr) = DCG_act(dpr) − DCG_act(bm25), exactly.
+    "BM25's gate costs 1.45 more" and "DPR's cascade scores 1.45 higher" are
+    the same statement. The label contrast is not reducible to this, because
+    the labels also compare G_q with R_q.
+  * **An interval is not the test.** H7 and the contrast are decided by the
+    registered permutation test and the exact McNemar test. The intervals say
+    how precise each number is. Where the two disagree, the test stands. bm25
+    `random` at t = 0.5 is the case in point: its group-difference interval,
+    [0.13, 1.74], excludes zero, but the permutation p is 0.19. Percentile
+    intervals for a difference of means are known to be too narrow when one
+    group is small and skewed (14 queries, mostly zeros).
+  * **95% two-sided is not the one-sided test.** dpr's rho at t = 0.5 has an
+    interval of [−0.03, 0.50] and a one-sided p of 0.0074. These do not
+    contradict each other: a one-sided 5% test corresponds to the lower bound
+    of a 90% interval, not a 95% one.
+  * **dpr's group intervals are conditional.** 97 of 1,000 resamples (205
+    condensed) drew fewer than two of its four gate-sensitive queries and were
+    dropped, as `h7_test` would refuse them. Those intervals hold only for
+    resamples where the test is defined; quote them with that.
+
+| file | digest |
+|---|---|
+| `analysis/real_bm25_kc100/intervals.csv` | `97b5f8289fb14e75` |
+| `analysis/real_dpr_kc100/intervals.csv` | `de24638df8570811` |
+| `analysis/real_bm25_kc100/contrast_intervals_vs_dpr.csv` | `c609cf950aaa102e` |
+| `analysis/real_dpr_kc100/contrast_intervals_vs_bm25.csv` | `c577adaa217c1f05` |
+
+---
+
 <!-- next entry below -->

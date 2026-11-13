@@ -1,8 +1,8 @@
 {
-  "timestamp": "2026-11-12T20:08:20+0530",
+  "timestamp": "2026-11-13T13:07:13+0530",
   "config_fingerprint": "46d0807d8ed3",
   "owner": "shubham",
-  "git_commit": "5808ed1341725ab3615b46a8b1085a0029833718",
+  "git_commit": "30af38f9904c4cefe4de3c26a1138f5702742c45",
   "python": "3.13.5",
   "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
   "numpy": "2.1.3",
@@ -18,6 +18,13 @@
     false,
     true
   ],
+  "bootstrap": {
+    "iterations": 1000,
+    "alpha": 0.05,
+    "seed": 42,
+    "unit": "query",
+    "method": "percentile"
+  },
   "label_counts": {
     "uncondensed": {
       "rerank_sensitive": 83,
@@ -43,14 +50,17 @@
   "files": [
     "additivity.png",
     "additivity_condensed.png",
+    "analysis_manifest.json",
     "budget_outcomes.csv",
+    "contrast_intervals_vs_dpr.csv",
     "contrast_vs_dpr.csv",
     "diagnosis.csv",
     "distributions.csv",
     "gating_failures.csv",
     "h7.csv",
+    "intervals.csv",
     "labels.csv",
     "unjudged_at_k.csv"
   ],
-  "seconds": 74.5
+  "seconds": 271.0
 }
