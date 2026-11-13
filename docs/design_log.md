@@ -1244,4 +1244,65 @@ policy is indistinguishable from zero at every t.
 
 ---
 
+## 2026-11-13 (later) — Candidate-set Recall@K_c, and recall is NOT the same for the two systems (Shubham)
+
+The last §12.1 pre-run check, which Anupam handed over: `feasibility_report.py`
+now reports Recall@K_c = |C_q ∩ R_q| / |R_q| per (query, system, K_c), with R_q
+the query's gain-carrying judged documents (grades 2 and 3). Its summary gives
+the mean, the median and the number of queries with a defined recall. Re-run on
+the frozen universe, **every pre-existing number in
+`analysis/feasibility_manifest.json` is reproduced exactly**, headline K_c = 100
+included. The only change is the three added fields per (K_c, system).
+
+| K_c | bm25 mean (median) | dpr mean (median) | dpr − bm25, paired | dpr higher / bm25 higher / tie |
+|---|---|---|---|---|
+| 100 | 0.529 (0.500) | **0.670** (0.750) | +0.141, Wilcoxon p ≈ 1e-6 | 65 / 18 / 14 |
+| 500 | 0.714 (0.833) | 0.806 (0.895) | +0.092, p 0.002 | 46 / 25 / 26 |
+| 1000 | 0.770 (0.897) | 0.843 (0.929) | +0.072, p 0.006 | 39 / 24 / 34 |
+
+**Validation.** bm25's mean Recall@1000 over the 97 queries is **0.7703**. That
+is exactly the query-weighted mean of its published TREC-DL recall@1000,
+(43 × 0.7501 + 54 × 0.7863) / 97 = 0.7703, from `verify_bm25.py`. The measure
+is the standard one and the candidate sets are the right ones.
+
+### Correction to the 2026-11-10 (later) and 2026-11-12 entries
+
+Both entries say the bm25-vs-dpr contrast is "a stronger claim than a recall
+difference, because recall of gainful documents is the same" (2026-11-12:
+"identical"). **It is not the same.** Those entries inferred recall from the
+*median* count of gain-carrying non-survivors, which is 6.0 for both. The
+means differ (27.9 against 22.7 at K_c = 100), and so does recall: dpr's top
+100 keeps 14 points more of each query's relevant documents, on 65 queries
+against 18.
+
+The recall gap also tracks the finding itself:
+
+  * on all **13 of 13** queries that are gate-sensitive under bm25 but not
+    dpr, dpr's Recall@100 is higher;
+  * bm25's 14 gate-sensitive queries have a mean Recall@100 of **0.16**,
+    against 0.59 for its other 83 queries;
+  * across the 97 queries, the paired recall gap (dpr − bm25) correlates with
+    the paired G_q gap (bm25 − dpr): Spearman 0.47, p 1e-6.
+
+What this does and does not change:
+
+  * **Unchanged:** every effect, H7 result and the McNemar contrast. They are
+    measured, not inferred from recall.
+  * **Changed: the explanation.** "bm25 is gate-sensitive more often because
+    its top 100 misses more of the relevant passages" is now a sufficient
+    descriptive account, and the data cannot separate it from "paradigm
+    alignment with the cross-encoder". The two may be one effect: the
+    passages a lexical retriever misses can be exactly the semantically
+    relevant ones a dense cross-encoder ranks highly. But the report cannot
+    claim the contrast is *beyond* a recall difference. The sentence "stronger
+    than a recall difference" should not appear in the report or the video.
+  * Both retrievers' Recall@100 belongs beside the gate results as context: at
+    the headline depth, bm25's candidate set holds about half of each query's
+    relevant passages.
+
+Files: `analysis/feasibility_density.parquet` gains the `recall_cq` column (the
+parquets are gitignored; the manifest carries the summary).
+
+---
+
 <!-- next entry below -->
