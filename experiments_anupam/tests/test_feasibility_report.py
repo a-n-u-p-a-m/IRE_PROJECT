@@ -284,6 +284,35 @@ def test_grade_one_documents_are_not_counted_as_gate_failures(
     assert any("bm25" in w for w in found["gate_failure_supply"]["where"])
 
 
+def test_candidate_set_recall_counts_gain_carrying_documents_only(
+    tmp_path, small_cfg_path
+):
+    """
+    Recall@K_c = |C_q ∩ R_q| / |R_q| over gain-carrying documents. With
+    overlap=20, dpr's top-20 is bm25's ranks 20-39, so the same judgments give
+    the two systems different recall. Grade 1 is judged but not relevant, and
+    a query with no gain-carrying judgment has no recall at all.
+    """
+    cfg_path = _cfg(tmp_path, small_cfg_path, cascade={"candidate_depths": [20]})
+    runs = _runs(overlap=20)
+    # bm25 keeps ranks 0 and 1 of the three relevant documents; dpr keeps 25.
+    # The grade-1 document at 30 is in dpr's C_q and must not count.
+    rows = _judge(runs, "bm25", {0: 3, 1: 2, 25: 3, 30: 1}, n_queries=6)
+    runs_dir, uni, qrels = _write(tmp_path, cfg_path, runs, rows)
+    out = tmp_path / "out"
+
+    summary, _ = fr.run(cfg_path, runs_dir, uni, qrels, str(out))
+    by = summary["by_k_c"][20]["by_system"]
+    assert by["bm25"]["mean_recall_cq"] == pytest.approx(round(2 / 3, 4))
+    assert by["dpr"]["mean_recall_cq"] == pytest.approx(round(1 / 3, 4))
+    assert by["bm25"]["queries_with_recall"] == 6      # q6, q7: nothing relevant
+    den = pd.read_parquet(out / "feasibility_density.parquet")
+    unjudged = den[den["query_id"].isin(["q6", "q7"])]
+    assert len(unjudged) and unjudged["recall_cq"].isna().all()
+    some = den[den["n_relevant_uq"] > 0]
+    assert np.allclose(some["recall_cq"], some["n_relevant_cq"] / some["n_relevant_uq"])
+
+
 def test_findings_are_grouped_by_kind_not_repeated_per_depth(
     tmp_path, small_cfg_path
 ):

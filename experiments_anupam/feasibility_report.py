@@ -29,6 +29,13 @@ puts almost every judged document inside a top-1000 candidate set. If the
 supply is thin at the largest K_c, the headline gate analysis belongs at a
 shallower one - and that rule is declared here, before magnitudes are seen.
 
+**Also reported: candidate-set Recall@K_c**, |C_q ∩ R_q| / |R_q| with R_q the
+query's gain-carrying judged documents - the last §12.1 pre-run check. Mean
+over queries is the TREC convention, so at K_c=1000 bm25's figure is directly
+comparable with its published recall@1000 (`verify_bm25.py`, grades >= 2,
+which is what the frozen gain map counts as relevant). A query with no
+gain-carrying judgment has no recall and is left out of the summary.
+
 A note on "relevant". A document counts here only if `gain(grade) > 0` under
 the frozen map, which on TREC-DL excludes grade 1 ("Related"). An earlier
 version of this report carried its own gain-map-aware counts beside
@@ -192,6 +199,7 @@ def density_table(
                 u = uq.loc[qid]
                 j_cq = cq & judged.get(qid, set())
                 r_cq = cq & relevant.get(qid, set())
+                n_r = len(relevant.get(qid, set()))
                 n_j_uq = int(u["n_judged"])
                 rows.append({
                     "query_id": qid,
@@ -203,7 +211,9 @@ def density_table(
                     "density_cq": len(j_cq) / len(cq) if cq else float("nan"),
                     "universe_size": int(u["universe_size"]),
                     "n_judged_uq": n_j_uq,
-                    "n_relevant_uq": len(relevant.get(qid, set())),
+                    "n_relevant_uq": n_r,
+                    # Candidate-set Recall@K_c over gain-carrying documents
+                    "recall_cq": (len(r_cq) / n_r) if n_r else float("nan"),
                     "density_uq": float(u["coverage"]),
                     # How much of the query's judged supply the gate kept
                     "judged_retained": (len(j_cq) / n_j_uq) if n_j_uq else float("nan"),
@@ -291,6 +301,9 @@ def verdict(leverage: pd.DataFrame, density: pd.DataFrame,
                 "median_density_uq": round(float(den["density_uq"].median()), 5),
                 "median_density_ratio": round(ratio, 2),
                 "median_judged_retained": round(float(den["judged_retained"].median()), 4),
+                "mean_recall_cq": round(float(den["recall_cq"].mean()), 4),
+                "median_recall_cq": round(float(den["recall_cq"].median()), 4),
+                "queries_with_recall": int(den["recall_cq"].notna().sum()),
                 "median_gainful_non_survivors": gainful,
                 "queries_with_no_gainful_non_survivor": int(
                     (ns["n_gainful_non_survivors"] == 0).sum()),
@@ -448,6 +461,8 @@ def main() -> int:
             print(f"    judged density  C_q / U_q      {s['median_density_cq']} / "
                   f"{s['median_density_uq']}   ratio {s['median_density_ratio']}x")
             print(f"    judged supply kept by the gate {s['median_judged_retained']}")
+            print(f"    candidate-set recall@K_c       {s['mean_recall_cq']} mean, "
+                  f"{s['median_recall_cq']} median ({s['queries_with_recall']} queries)")
             print(f"    gainful non-survivors (median) "
                   f"{s['median_gainful_non_survivors']}")
             print(f"    queries with none at all       "
