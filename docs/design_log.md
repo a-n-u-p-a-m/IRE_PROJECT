@@ -1305,4 +1305,27 @@ parquets are gitignored; the manifest carries the summary).
 
 ---
 
+## 2026-11-13 (gain map) — `headline_metric_gain_map` is descriptive (Shubham, agreed with Anupam)
+
+Freeze v2 left two gain maps: `gain_map` {0: 0, 1: 0, 2: 3, 3: 7}, where grade 1
+("Related") earns nothing, and `headline_metric_gain_map` {0: 0, 1: 1, 2: 3,
+3: 7}, the official-convention one, with the rule that if they differ both are
+reported. They differ, and the second one has never had a consumer.
+
+**Decision: document it as descriptive rather than wire it.** Every reported
+number — effects, labels, H7, the contrast, the intervals, the sensitivity
+grid — uses `gain_map`. The rule exists for comparing nDCG against published
+TREC-DL figures, and the report makes no such comparison. Its only published
+comparison is bm25's Recall@1000 (0.7703), which is binary at grade ≥ 2 and
+does not go through a gain map. Wiring the second map would add a parallel set
+of numbers that nothing in the report reads.
+
+What the report must therefore say once: utilities are DCG@k with grade 1 at
+zero gain, so they are not comparable with published nDCG@10. The key stays in
+`config/base.yaml` with a comment, as `alternative_source` did. Removing it
+would change fingerprint `46d0807d8ed3`; the comment does not, and that was
+checked after the edit.
+
+---
+
 <!-- next entry below -->

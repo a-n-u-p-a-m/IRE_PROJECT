@@ -104,6 +104,17 @@ utility:
   gain_map: {0: 0.0, 1: 0.0, 2: 3.0, 3: 7.0}
   # The headline ranking metric may use official qrel conventions instead. If
   # these two differ, both must be reported and the difference stated.
+  #
+  # DESCRIPTIVE, NOT OPERATIVE. No consumer reads this key (it is parsed into
+  # FrozenConfig.headline_gain_map and only test_config.py looks at it). Every
+  # reported number - effects, H7, the contrast, the intervals - uses
+  # `gain_map` above, so grade 1 earns nothing and our DCG@k is not comparable
+  # with published TREC-DL nDCG. The report quotes no nDCG against published
+  # figures (its one published comparison is bm25's Recall@1000, which does
+  # not go through a gain map), so the "report both" clause has nothing to
+  # bite on. Kept, not deleted: it is a field of the FrozenConfig behind
+  # fingerprint 46d0807d8ed3, and a comment is free where the value is not.
+  # See docs/design_log.md, 2026-11-13 (gain map).
   headline_metric_gain_map: {0: 0.0, 1: 1.0, 2: 3.0, 3: 7.0}
 
 qrels:
