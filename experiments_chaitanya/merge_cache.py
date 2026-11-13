@@ -160,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             logger.error("completeness check FAILED: %s", exc)
             return 1
 
+    completeness_checked = not args.skip_completeness
     # Write manifest
     manifest = run_manifest(
         cfg.fingerprint(),
@@ -169,12 +170,17 @@ def main(argv: list[str] | None = None) -> int:
             "total_rows": total,
             "expected_rows": EXPECTED_ROWS,
             "row_count_ok": total == EXPECTED_ROWS,
+            "completeness_checked": completeness_checked,
             "stage2_model": model,
             "shards": shard_records,
             "config_fingerprint": cfg.fingerprint(),
             "note": (
                 "Primary Stage-2 cache; merged from three disjoint shards. "
                 "Completeness verified against the frozen universe."
+                if completeness_checked else
+                "Primary Stage-2 cache; merged from three disjoint shards. "
+                "Completeness check was SKIPPED (--skip-completeness). "
+                "Row count matches expected but per-query coverage was not verified."
             ),
         },
     )

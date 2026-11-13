@@ -1306,3 +1306,56 @@ parquets are gitignored; the manifest carries the summary).
 ---
 
 <!-- next entry below -->
+
+---
+
+### 2026-11-13 — Chaitanya: synthetic fidelity superseded; merge_cache provenance fix
+
+**Owner:** Chaitanya  
+**Commits:** `ac78c2c`, `<next>`
+
+#### Synthetic fidelity is superseded by the real-data run
+
+Anupam asked whether `run_real_predictors.py` supersedes the synthetic fidelity
+numbers in `effects/e1_manifest.json` (owner: shubham, 2026-10-27, predating the
+C_q boundary fix).
+
+**Decision: yes, the real-data run supersedes the synthetic result entirely.**
+
+Reasons:
+
+1. `effects/e1_manifest.json` was produced before the `rank ≤ k_c` boundary fix
+   (2026-11-05 design log entry). Every fidelity number in it was computed with a
+   feature boundary that leaked non-survivor Stage-2 scores into the predictor.
+   Those numbers are invalid under freeze-v2 and should not appear in the report.
+
+2. `run_real_predictors.py` uses the corrected feature boundary (survivors only),
+   the actual merged Stage-2 cache (872,455 rows, `row_count_ok: true`), and the
+   97-query frozen universe. It is the definitive result.
+
+3. There is no "methods hole": the synthetic pipeline was always a dry-run to
+   validate the feature extractor and predictor code paths, not a result to
+   report. The report's methods section should describe the pipeline structure
+   (which is unchanged) and cite the real-data outputs only.
+
+**Action:** `effects/e1_manifest.json` remains in git as provenance of the
+dry-run, but no number from it appears in the report or video. The methods
+section uses outputs from `effects/real_predictors/`.
+
+#### `merge_cache.py` — provenance fix for `--skip-completeness`
+
+The manifest `note` previously claimed *"Completeness verified against the frozen
+universe"* unconditionally, even when `--skip-completeness` was passed. The
+manifest now records:
+
+```json
+"completeness_checked": true   // or false when --skip-completeness was used
+```
+
+and the `note` is conditional: a skipped run now states explicitly that
+per-query coverage was not verified. The actual merge that produced the live
+`cache/stage2.sqlite` did run the full check (`completeness_checked: true`,
+`row_count_ok: true`, 872,455 rows). This fix is forward-looking — it protects
+the provenance of any future re-merge.
+
+
