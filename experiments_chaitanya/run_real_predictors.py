@@ -451,6 +451,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     man_path = out_dir / "predictor_manifest.json"
     write_manifest(man_path, manifest)
+    write_manifest(out_dir / "predictors_manifest.json", manifest)
     logger.info("predictor manifest → %s", man_path)
     logger.info("Done in %.1fs", total_secs)
     return 0
