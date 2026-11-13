@@ -136,14 +136,22 @@ with label shares, headline power and both recommendations, to
 
 | file | what it does |
 |---|---|
-| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, H7 (group and continuous tests) per policy and t, the unjudged share of each world's top-k, and with `--contrast-with` the paired (exact McNemar) test of whether gate-sensitive queries are more frequent under one Stage-1 system |
-| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; unjudged shares match a direct count; end-to-end run on a small grid |
+| `analysis.py` | from effect tables alone: distributions by stratum (all and judged-only), the additivity figure, document labels and gating-failure examples, the query diagnosis, H7 (group and continuous tests) per policy and t, the unjudged share of each world's top-k, bootstrap intervals for the headline numbers (`intervals.csv`), and with `--contrast-with` the paired (exact McNemar) test of whether gate-sensitive queries are more frequent under one Stage-1 system, plus paired intervals for every system difference (`contrast_intervals_vs_<other>.csv`) |
+| `tests/test_analysis.py` | diagnosis and budget outcomes match `shared.diagnosis` exactly; unjudged shares match a direct count; interval points equal the reported numbers, paired intervals keep the pairing; end-to-end run on a small grid |
 
 It reads only what `engine.run_grid` writes, so it runs unchanged on the real
 effect tables in Week 3. K_c defaults to the feasibility report's headline.
 Every step runs once per ranking mode, every output row carries `condensed`,
 and the additivity figure is drawn per mode (`additivity.png`,
 `additivity_condensed.png`).
+
+Intervals are percentile bootstraps over queries (`shared.metrics.bootstrap_ci`,
+`predictors.bootstrap_iterations` and `bootstrap_alpha` from the config, seed
+`cfg.seed`), never over documents. All statistics share one seed, so they come
+from the same resamples. For the H7 group difference, a resample with fewer
+than two queries in a group is dropped, as `h7_test` would refuse it;
+`n_draws` below the iteration count says how many, and the interval is then
+conditional on the group being testable.
 
     python -m experiments_shubham.engine --regime weak_retriever
     python -m experiments_shubham.analysis --effects-dir effects/synthetic/weak_retriever --system synthetic

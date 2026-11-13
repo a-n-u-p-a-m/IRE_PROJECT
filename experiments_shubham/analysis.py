@@ -24,6 +24,12 @@ ones in Week 3:
     contrast        with --contrast-with: is a label (gate_sensitive by default)
                     more frequent under one Stage-1 system than the other on the
                     same queries - exact McNemar, the queries being paired
+    intervals       percentile bootstrap over QUERIES (shared.metrics.bootstrap_ci,
+                    predictors.bootstrap_iterations / bootstrap_alpha) for the
+                    headline quantities: mean DCG, G_q and R_q, the label shares,
+                    and per (policy, t) the mean Delta DCG and both H7 statistics;
+                    with --contrast-with, the same for system a minus system b,
+                    resampling query PAIRS
 
 Each of these runs once per ranking mode, reading that mode's own files, and
 every output row carries `condensed`. False is the primary estimand; True is
@@ -58,6 +64,7 @@ from shared.diagnosis import (
     h7_test,
 )
 from shared.effects import check_additivity, gating_failures, label_documents
+from shared.metrics import bootstrap_ci
 from shared.provenance import run_manifest, write_manifest
 from shared.schema import E_GATE, E_RERANK, load, single_mode
 
@@ -245,6 +252,150 @@ def contrast(effects_dir: str | Path, system: str, other: str, k_c: int,
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Bootstrap intervals
+# ──────────────────────────────────────────────────────────────────────
+
+def _delta_column(policy: str, t: float) -> str:
+    return f"delta_{policy}_t{t:g}"
+
+
+def query_table(diagnosis: pd.DataFrame, outcomes: pd.DataFrame) -> pd.DataFrame:
+    """One row per query: its diagnosis, and Delta DCG per (policy, t) as columns."""
+    single_mode(diagnosis, "query_table")
+    wide = outcomes.pivot_table(index="query_id", columns=["policy", "t"],
+                                values="delta_dcg", aggfunc="first")
+    wide.columns = [_delta_column(p, t) for p, t in wide.columns]
+    return diagnosis.merge(wide.reset_index(), on="query_id", how="left",
+                           validate="one_to_one")
+
+
+def _mean(col: str):
+    return lambda df: float(df[col].mean())
+
+
+def _share(col: str, value):
+    return lambda df: float((df[col] == value).mean())
+
+
+def _group_difference(col: str):
+    """h7_test's statistic: mean Delta of gate- minus rerank-sensitive queries."""
+    def stat(df: pd.DataFrame) -> float:
+        gate = df.loc[df["label"] == GATE_SENSITIVE, col]
+        rer = df.loc[df["label"] == RERANK_SENSITIVE, col]
+        if len(gate) < 2 or len(rer) < 2:     # h7_test's own testability guard
+            return float("nan")
+        return float(gate.mean() - rer.mean())
+    return stat
+
+
+def _spearman(col: str):
+    def stat(df: pd.DataFrame) -> float:
+        if df["g_q"].nunique() < 2 or df[col].nunique() < 2:
+            return float("nan")
+        return float(spearmanr(df["g_q"], df[col]).statistic)
+    return stat
+
+
+def _intervals(table: pd.DataFrame, specs, n_iter: int, alpha: float,
+               seed: int) -> pd.DataFrame:
+    """
+    `bootstrap_ci` for each (quantity, policy, t, statistic) in `specs`.
+
+    Every statistic is drawn with the same seed, so all intervals in one call
+    come from the same resamples of queries. A statistic that is undefined on
+    the full data (one query in an H7 group, say) gets no interval, even though
+    some resamples could define it. `n_draws` below `n_iter` means resamples
+    that left a group untestable were dropped, and the interval is conditional
+    on the group being testable: read it with `n_draws`.
+    """
+    rows = []
+    for quantity, policy, t, stat in specs:
+        ci = bootstrap_ci(table, stat, n_iter=n_iter, alpha=alpha, seed=seed)
+        defined = np.isfinite(ci["point"])
+        rows.append({
+            "quantity": quantity, "policy": policy, "t": t, "point": ci["point"],
+            "lo": ci["lo"] if defined else float("nan"),
+            "hi": ci["hi"] if defined else float("nan"),
+            "level": 1 - alpha, "n_queries": ci["n"], "n_draws": ci.get("n_draws", 0),
+        })
+    return pd.DataFrame(rows)
+
+
+def intervals(diagnosis: pd.DataFrame, outcomes: pd.DataFrame, n_iter: int,
+              alpha: float, seed: int) -> pd.DataFrame:
+    """
+    Percentile bootstrap intervals, resampling queries, for the headline numbers.
+
+    Per system: mean DCG@k of the cascade, mean G_q, R_q and signed R_q, the
+    shares of gate-sensitive queries and of queries the reranker harms; per
+    (policy, t): mean Delta DCG, the H7 group difference and Spearman rho.
+    Each point estimate is the number the rest of the analysis reports.
+    """
+    table = query_table(diagnosis, outcomes)
+    specs = [("dcg_actual_mean", None, None, _mean("dcg_actual")),
+             ("g_q_mean", None, None, _mean("g_q")),
+             ("r_q_mean", None, None, _mean("r_q")),
+             ("rerank_signed_mean", None, None, _mean("rerank_signed")),
+             ("share_gate_sensitive", None, None, _share("label", GATE_SENSITIVE)),
+             ("share_reranker_harms", None, None, _share("reranker_harms", True))]
+    for (policy, t), _ in outcomes.groupby(["policy", "t"]):
+        if float(t) == 1.0:                   # the baseline: Delta is 0 by definition
+            continue
+        col = _delta_column(policy, t)
+        specs += [("delta_mean", policy, float(t), _mean(col)),
+                  ("h7_group_difference", policy, float(t), _group_difference(col)),
+                  ("h7_spearman_rho", policy, float(t), _spearman(col))]
+    return _intervals(table, specs, n_iter, alpha, seed)
+
+
+def paired_intervals(diag_a: pd.DataFrame, diag_b: pd.DataFrame, n_iter: int,
+                     alpha: float, seed: int) -> pd.DataFrame:
+    """
+    System a minus system b on the same queries, resampling query PAIRS.
+
+    Resampling each system's queries separately would ignore the pairing, the
+    same mistake Fisher's test makes against McNemar's.
+    """
+    single_mode(diag_a, "paired_intervals")
+    single_mode(diag_b, "paired_intervals")
+    a, b = diag_a.set_index("query_id"), diag_b.set_index("query_id")
+    if set(a.index) != set(b.index):
+        raise ValueError("a paired interval needs both systems on the same queries")
+    b = b.reindex(a.index)
+    pair = pd.DataFrame({"query_id": a.index.astype(str)})
+    for col in ("dcg_actual", "g_q", "r_q"):
+        pair[f"{col}_diff"] = a[col].to_numpy(float) - b[col].to_numpy(float)
+    pair["gate_sensitive_diff"] = (a["label"].eq(GATE_SENSITIVE).to_numpy(int)
+                                   - b["label"].eq(GATE_SENSITIVE).to_numpy(int))
+    pair["reranker_harms_diff"] = (a["reranker_harms"].to_numpy(int)
+                                   - b["reranker_harms"].to_numpy(int))
+    specs = [("dcg_actual_mean_diff", None, None, _mean("dcg_actual_diff")),
+             ("g_q_mean_diff", None, None, _mean("g_q_diff")),
+             ("r_q_mean_diff", None, None, _mean("r_q_diff")),
+             ("share_gate_sensitive_diff", None, None, _mean("gate_sensitive_diff")),
+             ("share_reranker_harms_diff", None, None, _mean("reranker_harms_diff"))]
+    return _intervals(pair, specs, n_iter, alpha, seed)
+
+
+def contrast_intervals(effects_dir: str | Path, system: str, other: str, k_c: int,
+                       cfg: FrozenConfig, n_iter: int | None = None,
+                       modes: Sequence[bool] = MODES) -> pd.DataFrame:
+    """`paired_intervals` of `system` minus `other` at one K_c, per ranking mode."""
+    n_iter = n_iter or cfg.bootstrap_iterations
+    frames = []
+    for condensed in modes:
+        diags = [diagnose(load_stage(effects_dir, s, k_c, condensed), cfg.tau_query)
+                 for s in (system, other)]
+        out = paired_intervals(*diags, n_iter, cfg.bootstrap_alpha, cfg.seed)
+        out.insert(0, "condensed", condensed)
+        out.insert(1, "system_a", system)
+        out.insert(2, "system_b", other)
+        out.insert(3, "k_c", k_c)
+        frames.append(out)
+    return pd.concat(frames, ignore_index=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Labels, gating failures, additivity
 # ──────────────────────────────────────────────────────────────────────
 
@@ -310,7 +461,8 @@ def _mode_name(condensed: bool) -> str:
 
 def run(effects_dir: str | Path, system: str, k_c: int, cfg: FrozenConfig,
         out_dir: str | Path, n_permutations: int = 10000,
-        modes: Sequence[bool] = MODES) -> dict:
+        modes: Sequence[bool] = MODES, n_bootstrap: int | None = None) -> dict:
+    n_bootstrap = n_bootstrap or cfg.bootstrap_iterations
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     parts: dict[str, list[pd.DataFrame]] = {}
@@ -331,6 +483,8 @@ def run(effects_dir: str | Path, system: str, k_c: int, cfg: FrozenConfig,
             "unjudged_at_k": unjudged_at_k(stage),
         }
         tables["h7"] = h7(diag, tables["budget_outcomes"], n_permutations, cfg.seed)
+        tables["intervals"] = intervals(diag, tables["budget_outcomes"], n_bootstrap,
+                                        cfg.bootstrap_alpha, cfg.seed)
         for name, df in tables.items():
             df = df.drop(columns="condensed", errors="ignore")
             df.insert(0, "condensed", condensed)
@@ -346,7 +500,8 @@ def run(effects_dir: str | Path, system: str, k_c: int, cfg: FrozenConfig,
     tables = {name: pd.concat(dfs, ignore_index=True) for name, dfs in parts.items()}
     for name, df in tables.items():
         df.to_csv(out_dir / f"{name}.csv", index=False)
-    return {"tables": tables, "additivity": additivity, "label_counts": label_counts}
+    return {"tables": tables, "additivity": additivity, "label_counts": label_counts,
+            "n_bootstrap": n_bootstrap}
 
 
 def main() -> None:
@@ -361,9 +516,12 @@ def main() -> None:
     parser.add_argument("--out-dir", default=None,
                         help="default: analysis/<effects-dir name>_<system>_kc<K>")
     parser.add_argument("--n-permutations", type=int, default=10000)
+    parser.add_argument("--n-bootstrap", type=int, default=None,
+                        help="default: predictors.bootstrap_iterations in the config")
     parser.add_argument("--contrast-with", default=None, metavar="SYSTEM",
                         help="also test whether gate-sensitive queries are more frequent "
-                             "under --system than under SYSTEM (paired, exact McNemar)")
+                             "under --system than under SYSTEM (paired, exact McNemar), "
+                             "with paired bootstrap intervals for the differences")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -371,17 +529,25 @@ def main() -> None:
     name = f"{Path(args.effects_dir).name}_{args.system}_kc{k_c}"
     out_dir = Path(args.out_dir or Path(cfg.paths.get("analysis", "analysis")) / name)
     start = time.perf_counter()
-    result = run(args.effects_dir, args.system, k_c, cfg, out_dir, args.n_permutations)
+    result = run(args.effects_dir, args.system, k_c, cfg, out_dir, args.n_permutations,
+                 n_bootstrap=args.n_bootstrap)
     if args.contrast_with:
         paired = contrast(args.effects_dir, args.system, args.contrast_with, k_c, cfg)
         paired.to_csv(out_dir / f"contrast_vs_{args.contrast_with}.csv", index=False)
         logger.info("contrast:\n%s", paired.to_string(index=False))
+        diffs = contrast_intervals(args.effects_dir, args.system, args.contrast_with, k_c,
+                                   cfg, result["n_bootstrap"])
+        diffs.to_csv(out_dir / f"contrast_intervals_vs_{args.contrast_with}.csv", index=False)
+        logger.info("paired intervals:\n%s", diffs.to_string(index=False))
 
     write_manifest(out_dir / "analysis_manifest.json", run_manifest(
         cfg.fingerprint(), owner="shubham", extra={
             "effects_dir": str(args.effects_dir), "system": args.system, "k_c": k_c,
             "tau_query": cfg.tau_query, "tau_document": cfg.tau_document,
             "condensed_modes": list(MODES),
+            "bootstrap": {"iterations": result["n_bootstrap"],
+                          "alpha": cfg.bootstrap_alpha, "seed": cfg.seed,
+                          "unit": "query", "method": "percentile"},
             "label_counts": result["label_counts"], "additivity": result["additivity"],
             "files": sorted(p.name for p in out_dir.iterdir()),
             "seconds": round(time.perf_counter() - start, 1),

@@ -137,9 +137,9 @@ def test_run_end_to_end(small_cfg, grid, tmp_path):
     queries, settings = grid
     run_grid(queries, small_cfg, settings, tmp_path / "effects")
     result = analysis.run(tmp_path / "effects", "synthetic", 50, small_cfg,
-                          tmp_path / "out", n_permutations=200)
+                          tmp_path / "out", n_permutations=200, n_bootstrap=40)
     for name in ("distributions", "diagnosis", "budget_outcomes", "h7", "labels",
-                 "gating_failures", "unjudged_at_k"):
+                 "gating_failures", "unjudged_at_k", "intervals"):
         assert (tmp_path / "out" / f"{name}.csv").exists()
     assert (tmp_path / "out" / "additivity.png").exists()
     assert (tmp_path / "out" / "additivity_condensed.png").exists()
@@ -195,3 +195,105 @@ def test_contrast_reads_both_systems_in_each_mode(small_cfg, grid, tmp_path):
                                   small_cfg.tau_query) for s in ("a", "b")]
         assert row["n_a"] == (diag[0]["label"] == "gate_sensitive").sum()
         assert row["n_b"] == (diag[1]["label"] == "gate_sensitive").sum()
+
+
+# ── bootstrap intervals ───────────────────────────────────────────────
+
+def _diag_and_outcomes(small_cfg, grid, condensed=False):
+    queries, settings = grid
+    diag = analysis.diagnose(run_worlds(queries, 50, settings, condensed=condensed),
+                             small_cfg.tau_query)
+    budgets = {p: run_budget(queries, 50, 50, small_cfg.t_grid, p,
+                             [42] if p != "random" else list(small_cfg.budget_seeds),
+                             settings, condensed=condensed)
+               for p in small_cfg.outsider_policies}
+    return diag, analysis.budget_outcomes(budgets)
+
+
+def test_interval_points_are_the_reported_numbers(small_cfg, grid):
+    diag, outcomes = _diag_and_outcomes(small_cfg, grid)
+    ci = analysis.intervals(diag, outcomes, n_iter=60, alpha=0.1, seed=7)
+    one = ci[ci["policy"].isna()].set_index("quantity")["point"]
+    assert one["g_q_mean"] == pytest.approx(diag["g_q"].mean())
+    assert one["dcg_actual_mean"] == pytest.approx(diag["dcg_actual"].mean())
+    assert one["share_gate_sensitive"] == pytest.approx((diag["label"] == "gate_sensitive").mean())
+    h7 = analysis.h7(diag, outcomes, n_permutations=50).set_index(["policy", "t"])
+    per = ci[ci["policy"].notna()].set_index(["quantity", "policy", "t"])["point"]
+    for (policy, t), row in h7.iterrows():
+        assert per[("h7_spearman_rho", policy, t)] == pytest.approx(row["spearman_rho"])
+        diff = per[("h7_group_difference", policy, t)]
+        if np.isnan(row["group_difference"]):
+            assert np.isnan(diff)
+        else:
+            assert diff == pytest.approx(row["group_difference"])
+        mean = outcomes[(outcomes["policy"] == policy) & (outcomes["t"] == t)]["delta_dcg"].mean()
+        assert per[("delta_mean", policy, t)] == pytest.approx(mean)
+    n_t = sum(t != 1.0 for t in small_cfg.t_grid)
+    assert len(ci) == 6 + 3 * len(small_cfg.outsider_policies) * n_t
+    assert (ci["level"] == 0.9).all() and (ci["n_queries"] == len(diag)).all()
+
+
+def test_intervals_are_reproducible_and_bracket_the_mean(small_cfg, grid):
+    diag, outcomes = _diag_and_outcomes(small_cfg, grid)
+    a = analysis.intervals(diag, outcomes, n_iter=80, alpha=0.05, seed=3)
+    b = analysis.intervals(diag, outcomes, n_iter=80, alpha=0.05, seed=3)
+    pd.testing.assert_frame_equal(a, b)
+    means = a[a["quantity"].str.endswith("_mean") & np.isfinite(a["lo"])]
+    assert (means["lo"] <= means["point"] + 1e-12).all()
+    assert (means["point"] <= means["hi"] + 1e-12).all()
+
+
+def test_untestable_h7_group_gets_no_interval():
+    diag = pd.DataFrame({"query_id": [f"q{i}" for i in range(6)],
+                         "label": ["gate_sensitive"] + ["rerank_sensitive"] * 5,
+                         "g_q": [3.0, 0, 0, 0, 0, 0], "r_q": [1.0] * 6,
+                         "rerank_signed": [1.0] * 6, "dcg_actual": [5.0] * 6,
+                         "reranker_harms": [False] * 6})
+    outcomes = pd.DataFrame({"query_id": diag["query_id"], "t": 0.5, "policy": "boundary",
+                             "delta_dcg": [4.0, 0, 1, 0, 0, 0]})
+    ci = analysis.intervals(diag, outcomes, n_iter=50, alpha=0.05, seed=1)
+    grp = ci[ci["quantity"] == "h7_group_difference"].iloc[0]
+    assert np.isnan(grp["point"]) and np.isnan(grp["lo"]) and np.isnan(grp["hi"])
+
+
+def _paired(shift=0.0, queries=6):
+    rng = np.random.default_rng(0)
+    g = rng.normal(size=queries)
+    base = {"query_id": [f"q{i}" for i in range(queries)], "condensed": False,
+            "dcg_actual": 10 + g, "r_q": np.abs(g), "reranker_harms": g < 0}
+    a = pd.DataFrame({**base, "g_q": g + shift,
+                      "label": ["gate_sensitive"] * 2 + ["rerank_sensitive"] * (queries - 2)})
+    b = pd.DataFrame({**base, "g_q": g, "label": ["rerank_sensitive"] * queries})
+    return a, b
+
+
+def test_paired_intervals_keep_the_pairing():
+    a, b = _paired(shift=0.5)
+    ci = analysis.paired_intervals(a, b, n_iter=100, alpha=0.05, seed=2).set_index("quantity")
+    # a constant per-query shift is exact under pair resampling; resampling the
+    # two systems' queries separately would give it the spread of g itself
+    assert (ci.loc["g_q_mean_diff", "lo"], ci.loc["g_q_mean_diff", "hi"]) == pytest.approx((0.5, 0.5))
+    assert ci.loc["dcg_actual_mean_diff", "point"] == pytest.approx(0.0)
+    assert ci.loc["share_gate_sensitive_diff", "point"] == pytest.approx(2 / 6)
+    assert 0 <= ci.loc["share_gate_sensitive_diff", "lo"] <= 2 / 6
+
+
+def test_paired_intervals_refuse_unpaired_queries():
+    a, b = _paired()
+    with pytest.raises(ValueError, match="same queries"):
+        analysis.paired_intervals(a, b.iloc[1:], n_iter=10, alpha=0.05, seed=0)
+
+
+def test_contrast_intervals_in_each_mode(small_cfg, grid, tmp_path):
+    from shared.schema import save
+    queries, settings = grid
+    for system in ("a", "b"):
+        st = replace(settings, stage1_system=system)
+        for condensed in MODES:
+            save(run_worlds(queries, 50, st, condensed=condensed),
+                 tmp_path / f"{analysis.table_name(system, 50, None, condensed)}.parquet",
+                 "effect")
+    out = analysis.contrast_intervals(tmp_path, "a", "b", 50, small_cfg, n_iter=30)
+    assert list(out["condensed"].unique()) == list(MODES)
+    # the same cascade under two names: every paired difference is exactly zero
+    assert np.allclose(out[["point", "lo", "hi"]].to_numpy(float), 0.0)
