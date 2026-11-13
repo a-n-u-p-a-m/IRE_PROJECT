@@ -46,6 +46,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from shared.schema import DELTA_T, E_GATE, E_RERANK
+
 logger = logging.getLogger(__name__)
 
 _SYSTEM_DEFAULT = None   # run both
@@ -56,7 +58,8 @@ def _load_query_split(split_path: Path | str) -> dict[str, set]:
     Load train/val/test query-ID split.
 
     Accepts either:
-    * A JSON file: ``{"train": [...], "val": [...], "test": [...]}``
+    * A JSON file: ``{"splits": {"train": [...], "val": [...], "test": [...]}}``
+      or ``{"train": [...], "val": [...], "test": [...]}``
     * A directory containing ``train.txt``, ``val.txt``, ``test.txt``
       (one query_id per line, no header).
     """
@@ -64,7 +67,13 @@ def _load_query_split(split_path: Path | str) -> dict[str, set]:
     p = Path(split_path)
     if p.is_file() and p.suffix == ".json":
         raw = json.loads(p.read_text())
-        return {k: set(str(x) for x in v) for k, v in raw.items()}
+        if "splits" in raw and isinstance(raw["splits"], dict):
+            raw = raw["splits"]
+        return {
+            k: set(str(x) for x in v)
+            for k, v in raw.items()
+            if isinstance(v, (list, set, tuple))
+        }
     if p.is_dir():
         result: dict[str, set] = {}
         for split in ("train", "val", "test"):
@@ -75,8 +84,8 @@ def _load_query_split(split_path: Path | str) -> dict[str, set]:
             return result
     raise FileNotFoundError(
         f"Cannot find query split at {split_path}. "
-        "Expected a JSON file with keys train/val/test, or a directory with "
-        "train.txt / val.txt / test.txt."
+        "Expected a JSON file with keys train/val/test (or nested under 'splits'), "
+        "or a directory with train.txt / val.txt / test.txt."
     )
 
 
@@ -94,25 +103,50 @@ def _headline_effect_path(effects_dir: Path, system: str, k_c: int) -> Path:
 
 def _load_effects(effects_dir: Path, system: str, cfg) -> pd.DataFrame:
     """
-    Load the headline uncondensed effect table for *system*.
+    Load the headline uncondensed effect tables for *system*.
 
-    Only ``{system}_stage_kc{K_c}.parquet`` is loaded (K_c = first entry of
-    cfg.candidate_depths, the same depth used throughout the pipeline).
-    Loading all 24 BM25 tables at once would mix condensed/uncondensed modes
-    (forbidden by freeze-v2) and exhaust RAM on the full 97-query run.
+    Loads both the stage effect table (``{system}_stage_kc{K_c}.parquet`` for
+    E_rerank and E_gate) and the headline budget table
+    (``{system}_budget_kc{K_c}_boundary.parquet`` for Delta_t) at K_c = first
+    entry of cfg.candidate_depths (e.g. 100), uncondensed.
     """
     k_c = cfg.candidate_depths[0]  # headline depth, e.g. 100
     path = _headline_effect_path(effects_dir, system, k_c)
     if not path.exists():
         raise FileNotFoundError(
-            f"Headline effect table not found: {path}. "
+            f"Headline stage effect table not found: {path}. "
             f"Run `python -m experiments_shubham.real --system {system}` first."
         )
     effects = pd.read_parquet(path)
     effects["query_id"] = effects["query_id"].astype(str)
     effects["doc_id"] = effects["doc_id"].astype(str)
-    logger.info("loaded %d effect rows for system=%s from %s",
+    logger.info("loaded %d stage effect rows for system=%s from %s",
                 len(effects), system, path.name)
+
+    # Load headline budget table for Delta_t (uncondensed)
+    budget_file = effects_dir / f"{system}_budget_kc{k_c}_boundary.parquet"
+    if not budget_file.exists():
+        candidates = sorted(effects_dir.glob(f"{system}_budget_kc{k_c}_*.parquet"))
+        candidates = [c for c in candidates if "condensed" not in c.name]
+        if candidates:
+            budget_file = candidates[0]
+
+    if budget_file.exists():
+        b_df = pd.read_parquet(budget_file)
+        b_df["query_id"] = b_df["query_id"].astype(str)
+        b_df["doc_id"] = b_df["doc_id"].astype(str)
+        logger.info(
+            "loaded %d budget effect rows for delta_t from %s",
+            len(b_df), budget_file.name
+        )
+        effects = pd.concat([effects, b_df], ignore_index=True)
+    else:
+        logger.warning(
+            "Headline budget effect table not found in %s for system=%s, k_c=%d; "
+            "delta_t will be missing.",
+            effects_dir, system, k_c,
+        )
+
     return effects
 
 
@@ -275,7 +309,7 @@ def _run_system(
     t0 = time.perf_counter()
     predictors = fit_all_predictors(train_feats, train_eff)
     fit_secs = time.perf_counter() - t0
-    logger.info("fitted %d predictors in %.1fs", len(predictors), fit_secs)
+    logger.info("fitted %d predictors in %.1fs: %s", len(predictors), fit_secs, list(predictors.keys()))
 
     # --- Evaluate: stratified fidelity table on test queries -------------
     logger.info("evaluating predictors on %d test queries …", len(test_qids))
@@ -293,7 +327,7 @@ def _run_system(
     cf_rows = harness.sweep_budgets(
         full_effects=test_eff,
         feature_df=test_feats,
-        budgets=cfg.outsider_budgets + [len(test_eff)],
+        budgets=list(cfg.outsider_budgets) + [len(test_eff)],
         seed=seed,
         top_m=top_m,
     )

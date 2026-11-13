@@ -27,7 +27,9 @@ Key design decisions:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -141,38 +143,117 @@ def compute_cost_fidelity_curve(
     """
     results_for_curve = []
 
+    pred_name = getattr(predictor, "model_type", "predictor")
+    ref_eff = full_effects[full_effects["effect_type"] == effect_type].copy()
+
     for budget in sorted(budget_grid):
         approx = _approximate_effects_at_budget(
-            full_effects, feature_df, predictor, effect_type, budget, seed=seed
+            ref_eff, feature_df, predictor, effect_type, budget, seed=seed
         )
 
-        # Merge predictor predictions onto approximate frame
-        pred_df = predictor.predict(feature_df)
-        pred_col = f"pred_{effect_type}"
-        merged = approx.merge(
-            pred_df[["query_id", "doc_id", pred_col]],
-            on=["query_id", "doc_id"],
-            how="left",
-        )
-
-        # Compute fidelity of APPROX effects vs EXACT effects
-        # (the predictor column here is the approximated effect, not the
-        # raw predictor output — we compare approx to reference)
-        approx_col = "effect_approx"
-        merged[approx_col] = approx["effect"].values
+        eval_df = ref_eff.copy()
+        eval_df["effect_approx"] = approx["effect"].values
 
         fid = evaluate_within_strata(
-            merged,
-            predicted_column=approx_col,
+            eval_df,
+            predicted_column="effect_approx",
+            target_column="effect",
             effect_type=effect_type,
             top_m=top_m,
             n_iter=200,  # fewer iterations for the curve sweep
             seed=seed,
         )
+        if not fid.empty:
+            fid["predictor"] = pred_name
         results_for_curve.append((budget, fid))
 
     curve = cost_fidelity_curve(results_for_curve, stratum=stratum)
     return curve
+
+
+class CostFidelityHarness:
+    """
+    Harness for sweeping Stage-2 extra call budgets across effect types and strata.
+
+    Parameters
+    ----------
+    predictors : dict[str, Any]
+        Mapping from effect_type to fitted EffectPredictor.
+    """
+
+    def __init__(self, predictors: dict[str, Any]) -> None:
+        self.predictors = predictors
+
+    def sweep_budgets(
+        self,
+        full_effects: pd.DataFrame,
+        feature_df: pd.DataFrame,
+        budgets: Sequence[int],
+        seed: int = 42,
+        top_m: int = 20,
+        strata: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """
+        Sweep extra Stage-2 call budgets across all predictors and strata.
+
+        Returns a DataFrame with one row per (budget, effect_type, stratum, predictor).
+        """
+        all_curves: list[pd.DataFrame] = []
+        budget_list = sorted({int(b) for b in budgets})
+
+        for effect_type, predictor in self.predictors.items():
+            eff_subset = full_effects[full_effects["effect_type"] == effect_type]
+            if eff_subset.empty:
+                continue
+
+            available_strata = (
+                list(strata)
+                if strata is not None
+                else [s for s in eff_subset["stratum"].dropna().unique()]
+            )
+
+            for st in available_strata:
+                sel = eff_subset[eff_subset["stratum"] == st]
+                if sel.empty:
+                    continue
+                try:
+                    curve = compute_cost_fidelity_curve(
+                        full_effects=eff_subset,
+                        feature_df=feature_df,
+                        predictor=predictor,
+                        effect_type=effect_type,
+                        budget_grid=budget_list,
+                        stratum=st,
+                        seed=seed,
+                        top_m=top_m,
+                    )
+                    if not curve.empty:
+                        curve["effect_type"] = effect_type
+                        if "extra_stage2_calls" in curve.columns:
+                            curve["budget"] = curve["extra_stage2_calls"]
+                        all_curves.append(curve)
+                except Exception as exc:
+                    logger.warning(
+                        "cost-fidelity sweep failed for %s / %s: %s",
+                        effect_type, st, exc,
+                    )
+
+        if not all_curves:
+            return pd.DataFrame(
+                columns=[
+                    "budget", "extra_stage2_calls", "effect_type", "stratum",
+                    "predictor", "spearman", "mae", "top_m_recovery", "n_documents",
+                ]
+            )
+
+        res = pd.concat(all_curves, ignore_index=True)
+        cols_order = [
+            "budget", "extra_stage2_calls", "effect_type", "stratum",
+            "predictor", "spearman", "mae", "top_m_recovery", "n_documents",
+        ]
+        existing = [c for c in cols_order if c in res.columns]
+        extra = [c for c in res.columns if c not in existing]
+        return res[existing + extra]
 
 
 def convergence_check(
@@ -365,6 +446,7 @@ def synthetic_cost_fidelity(
 
 __all__ = [
     "CostFidelityPoint",
+    "CostFidelityHarness",
     "compute_cost_fidelity_curve",
     "convergence_check",
     "synthetic_cost_fidelity",

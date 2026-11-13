@@ -1309,38 +1309,38 @@ parquets are gitignored; the manifest carries the summary).
 
 ---
 
-### 2026-11-13 — Chaitanya: synthetic fidelity superseded; merge_cache provenance fix
+### 2026-11-13 — Chaitanya: E1 engine validation stays; provisional synthetic predictors superseded; merge_cache provenance fix
 
 **Owner:** Chaitanya  
-**Commits:** `ac78c2c`, `<next>`
+**Commits:** `ac78c2c`, `7ef19bb`, `<next>`
 
-#### Synthetic fidelity is superseded by the real-data run
+#### Correction: E1 engine validation is valid; only early synthetic predictor trials are superseded
 
-Anupam asked whether `run_real_predictors.py` supersedes the synthetic fidelity
-numbers in `effects/e1_manifest.json` (owner: shubham, 2026-10-27, predating the
-C_q boundary fix).
+Shubham clarified that `effects/e1_manifest.json` (owner: shubham, 2026-10-27) is
+Experiment E1 — the counterfactual engine validation (81.6M rows, independent
+re-derivation with max |diff| 0.0, plus the five engine sanity checks across stress
+variants). It contains no predictors, features, or fidelity metrics.
 
-**Decision: yes, the real-data run supersedes the synthetic result entirely.**
+**Clarification and decision:**
 
-Reasons:
+1. **E1 engine validation stands and stays in the report.**
+   `effects/e1_manifest.json` validates the mathematical correctness of the
+   counterfactual engine across 81.6 million rows. It has no dependency on the
+   Stage-2 cache or feature boundaries, and remains valid and cited in the report.
 
-1. `effects/e1_manifest.json` was produced before the `rank ≤ k_c` boundary fix
-   (2026-11-05 design log entry). Every fidelity number in it was computed with a
-   feature boundary that leaked non-survivor Stage-2 scores into the predictor.
-   Those numbers are invalid under freeze-v2 and should not appear in the report.
+2. **What is superseded:** Only the provisional synthetic predictor trials (from
+   late October in `experiments_chaitanya/synthetic_results/`, which predated the
+   survivor-boundary correction `rank ≤ k_c`). Those early synthetic numbers
+   leaked non-survivor Stage-2 scores and must not appear in the report or video.
 
-2. `run_real_predictors.py` uses the corrected feature boundary (survivors only),
-   the actual merged Stage-2 cache (872,455 rows, `row_count_ok: true`), and the
-   97-query frozen universe. It is the definitive result.
+3. **Empirical predictor results:** `run_real_predictors.py` evaluates predictors
+   on the real Stage-2 cache (872,455 rows, `row_count_ok: true`) and frozen
+   universe under the freeze-v2 survivor boundary, writing to
+   `effects/real_predictors/`.
 
-3. There is no "methods hole": the synthetic pipeline was always a dry-run to
-   validate the feature extractor and predictor code paths, not a result to
-   report. The report's methods section should describe the pipeline structure
-   (which is unchanged) and cite the real-data outputs only.
-
-**Action:** `effects/e1_manifest.json` remains in git as provenance of the
-dry-run, but no number from it appears in the report or video. The methods
-section uses outputs from `effects/real_predictors/`.
+**Action:** `effects/e1_manifest.json` stays in the report as the primary validation
+of the counterfactual engine. Empirical predictor fidelity and cost-fidelity curves
+are cited exclusively from `effects/real_predictors/`.
 
 #### `merge_cache.py` — provenance fix for `--skip-completeness`
 
