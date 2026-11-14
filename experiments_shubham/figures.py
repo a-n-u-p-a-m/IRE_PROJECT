@@ -371,7 +371,9 @@ def gating_examples(cfg, k_c: int, effects_dir: Path, analysis_dir: Path):
     fig.text(0.01, 0.005, "Grades: TREC-DL qrels (3 = perfectly relevant). Passages: MS MARCO "
              "v1, mojibake repaired with ftfy for display.", fontsize=7, color=INK_2)
     fig.tight_layout(rect=(0, 0.02, 1, 1))
-    return fig, data
+    # The figure shows short excerpts; the committed data file keeps ids, ranks
+    # and grades only, so the repository still carries no passage text.
+    return fig, data.drop(columns=["excluded_text", "top_text"])
 
 
 FIGURES = {"effect_distributions": effect_distributions, "utility_vs_t": utility_vs_t,

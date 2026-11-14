@@ -1,0 +1,55 @@
+{
+  "timestamp": "2026-11-14T14:50:41+0530",
+  "config_fingerprint": "46d0807d8ed3",
+  "owner": "anupam",
+  "git_commit": "fcfa58babf1b98baced6b35840de64a307ed1470",
+  "python": "3.13.5",
+  "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
+  "numpy": "2.1.3",
+  "torch": "2.11.0",
+  "cuda": null,
+  "gpu": null,
+  "artifact": [
+    "/private/tmp/claude-501/-Users-shubhampaliwal-Downloads-IRE-PROJECT/0ba0af89-0ee0-477b-8662-adb2034cbe75/scratchpad/alloc/allocation_audit.parquet",
+    "/private/tmp/claude-501/-Users-shubhampaliwal-Downloads-IRE-PROJECT/0ba0af89-0ee0-477b-8662-adb2034cbe75/scratchpad/alloc/allocation_promoted.parquet"
+  ],
+  "n_allocations": 11640,
+  "n_promoted_rows": 1319200,
+  "t_grid": [
+    1.0,
+    0.9,
+    0.75,
+    0.5
+  ],
+  "policies": [
+    "boundary",
+    "alternative",
+    "random"
+  ],
+  "budget_seeds": [
+    42,
+    43,
+    44
+  ],
+  "b_equals_kc": true,
+  "all_allocations_valid": true,
+  "random_seed_sensitivity": 1.0,
+  "by_k_c": {
+    "100": {
+      "budget_b": 100,
+      "n_allocations": 3880,
+      "n_promoted_median": 25.0
+    },
+    "500": {
+      "budget_b": 500,
+      "n_allocations": 3880,
+      "n_promoted_median": 125.0
+    },
+    "1000": {
+      "budget_b": 1000,
+      "n_allocations": 3880,
+      "n_promoted_median": 250.0
+    }
+  },
+  "problems": []
+}

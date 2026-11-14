@@ -1537,4 +1537,140 @@ is F1.
 
 ---
 
+## 2026-11-14 (outsiders) — What the policies promote, coverage caveats, seed variation, provenance, figures (Shubham, for Anupam's Week-3/4 list)
+
+The non-writing items left on Anupam's list, closed so the report and video
+have every input:
+- the allocation audit's record;
+- what each outsider policy actually promotes;
+- the boundary-probe false-negative rate;
+- the seed-variation report;
+- the coverage caveats;
+- the provenance check;
+- the figures;
+- the reproducibility pack (`REPRODUCE.md`).
+
+Records:
+- `analysis/allocation_manifest.json` (re-run at `fcfa58b`; both artefacts
+  are byte-identical to the allocations every effect used);
+- `analysis/outsiders/outsiders_manifest.json`;
+- `figures/figures_manifest.json`.
+
+### Allocation audit
+
+All 11,640 allocations are valid: every one spends exactly B, the four strata
+partition U_q, and t = 1 is the conventional cascade. The random control
+changes its selection with its seed in 100% of settings. This was run on
+2026-11-05 but its manifest was never committed. It is now.
+
+### What each policy actually promotes (K_c = 100, world D, all 97 queries)
+
+Per t, (1 − t) · B outsiders per query: 10, 25 and 50.
+
+| system | policy | t = 0.9: judged · relevant · in top-10 · failures found | t = 0.5: same |
+|---|---|---|---|
+| bm25 | alternative | 60% · 29% · 12.4% · 106 of 140 | 37% · 16% · 3.1% · 130 of 140 |
+| bm25 | boundary | 26% · 7.3% · 1.2% · 7 of 140 | 22% · 6.8% · 1.1% · 30 of 140 |
+| bm25 | random | 1.1% · 0.4% · 0% · 0 | 1.2% · 0.2% · 0% · 0.3 |
+| dpr | alternative | 82% · 11% · 1.0% · 6 of 21 | 46% · 6.2% · 0.3% · 12 of 21 |
+| dpr | boundary | 25% · 7.6% · 0.2% · 2 of 21 | 21% · 6.0% · 0.1% · 6 of 21 |
+| dpr | random | 0.8% · 0.1% · 0% · 0.3 | 1.3% · 0.2% · 0% · 0.3 |
+
+Here "relevant" means grade ≥ 2, and "failures found" counts exact gating
+failures among the promoted documents; random is averaged over three seeds.
+
+**The boundary-probe false-negative rate is high.** Of bm25's 140 gating
+failures, boundary promotion misses **95%** at t = 0.9, 86% at 0.75 and 79% at
+0.5. In 30–43 of the 49 queries that have a failure, it finds none. Alternative
+promotion misses 24%, 11% and 7%. For dpr (21 failures), boundary misses
+90–71% and alternative 71–43%. The documents the gate wrongly drops are not
+just below the cutoff; they are wherever the other retriever puts them. The
+cost-fidelity probes in the 2026-11-14 entry show the same thing, at the
+probes' own budgets.
+
+### Seed variation of the random control
+
+Each budget seed (42, 43, 44) on its own, K_c = 100:
+
+| system | t | mean Δ DCG@10 across seeds | H7 group p across seeds | Spearman ρ across seeds |
+|---|---|---|---|---|
+| bm25 | 0.5 | −0.78 to −0.73 | 0.18–0.20 | −0.04 to −0.01 |
+| bm25 | 0.75 | −0.24 to −0.18 | 0.73–0.88 | −0.14 to −0.08 |
+| bm25 | 0.9 | −0.08 to −0.07 | 0.42–0.45 | −0.16 to −0.12 |
+| dpr | 0.5 | −0.007 to 0.002 | 0.080–0.082 | −0.11 |
+| dpr | 0.75 | −0.011 to 0.008 | 0.12–0.26 | −0.32 to −0.15 |
+| dpr | 0.9 | 0.023 to 0.025 | 0.78–0.92 | −0.29 to −0.24 |
+
+**The control's verdict does not depend on its seed.** It is null on the group
+test under every seed (smallest p 0.080), its Spearman ρ is negative under
+every seed, and its mean effect moves by at most 0.06 DCG. Averaging the three
+seeds, as `analysis.py` does, hides nothing.
+
+### Coverage caveats, for the threats section
+
+1. **The universe is the denominator.** U_q is the union of the two
+   retrievers' top-5,000.
+   - It holds 3,781 of the 4,167 relevant judged passages: **90.7%**, with a
+     per-query median of 100%.
+   - 12 queries keep under 90%, the worst only 8%.
+   - A relevant passage outside U_q is invisible to every world. E_gate and
+     G_q are therefore relative to the universe and understate the gate's
+     cost wherever both retrievers missed a passage.
+2. **Judgments sit in the head.** At K_c = 100, C_q is 28.6× (bm25) and 26.9×
+   (dpr) more densely judged than U_q: median 0.51 and 0.48, against 0.0165.
+   An unjudged document earns zero gain, so world C promotes from a sparsely
+   judged pool. It matters less than feared:
+   - world C's top 10 is 4.02% unjudged;
+   - the condensed mode, which drops unjudged documents before ranking,
+     reproduces every conclusion: the labels to within 2, the contrast, H7
+     for bm25 alternative, and the intervals.
+3. **The pools favour bm25.**
+   - dpr's own Stage-1 top 10 (world B) is 8.87% unjudged, against bm25's
+     0.31%.
+   - bm25's top 100 holds 5,116 judged documents, dpr's 4,723.
+   - This biases dpr's E_rerank upward. The condensed R_q is 1.96 against
+     2.20 uncondensed, and dpr's R_q stays below bm25's either way.
+4. **Gate-failure supply thins with depth.**
+   - Median gain-carrying non-survivors: 6.0 at K_c = 100, 3.0 at 500, and
+     2.0 / 1.0 at 1000.
+   - Queries with none: 17 / 23 at 100, rising to 36 / 39 at 1000.
+   - The K_c = 1000 rows of the one-axis comparison rest on 15 (bm25) and
+     1 (dpr) queries with any gating failure; read them as such.
+5. **Grade 1 is judged but carries no gain** (3,541 of 20,646 judgments). This
+   is the frozen gain map, stated once in the report; see the gain-map entry.
+6. **Recall differs between the systems** (Recall@100: 0.53 bm25, 0.67 dpr;
+   the 2026-11-13 recall entry). The bm25–dpr contrast cannot be claimed to be
+   beyond a recall difference.
+
+### Provenance
+
+Every committed run record carries fingerprint `46d0807d8ed3`, checked over
+`git ls-files '*manifest*.json'` after this commit. Digests of the gitignored
+outsider tables (sha256, first 16 hex): `promotion.csv` `da705e28b629eafc`,
+`false_negatives.csv` `7095598485fd3989`, `seed_variation.csv`
+`6e583e5aa0d14dbb`.
+
+### Figures
+
+In `figures/`, one command each (`python -m experiments_shubham.figures --only
+<name>`), each with the exact numbers it plots in `figures/data/<name>.csv`:
+
+| figure | shows |
+|---|---|
+| `effect_distributions.png` | nonzero effects by stratum, with stratum sizes, bm25 vs dpr |
+| `utility_vs_t.png` | mean Δ DCG@10 against t per policy, 95% bootstrap bands |
+| `h7.png` | Δ for gate- vs rerank-sensitive queries, every policy and t, group sizes and p |
+| `cost_fidelity.png` | gate loss recovered and G_q ρ against extra Stage-2 calls per query; best predictor marked |
+| `gating_examples.png` | the three pre-selected gating failures with passage text |
+
+The additivity figures are written by `analysis.py`
+(`analysis/real_<system>_kc100/additivity*.png`).
+
+**Still open for the gating figure:** whether bm25 indexed "Famvir®" as a
+garbled token (example 2). A one-off check against the raw collection text
+settles it; until then the report should not present example 2 as a lexical
+miss.
+
+---
+
 <!-- next entry below -->
