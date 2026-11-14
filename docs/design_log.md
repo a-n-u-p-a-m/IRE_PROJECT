@@ -1673,4 +1673,36 @@ miss.
 
 ---
 
+## 2026-11-14 (famvir) — The famvir gating failure is an encoding fault in the collection (Shubham)
+
+The open question from the 2026-11-13 and 2026-11-14 (outsiders) entries is
+settled. The raw MS MARCO line for passage 8117090 reads
+
+    b'8117090\tFamciclovir (Famvir\xc3\x82\xc2\xae) is a prescription antiviral ...'
+
+That is "Famvir®" encoded as UTF-8 twice: "FamvirÂ®". Lucene's standard
+tokenizer, which the Pyserini BM25 index uses, treats "Â" as a letter and "®"
+as a word break, so the indexed word is "famvirâ". The query word "famvir"
+cannot match it. Nothing else in the passage carries the query: "Famciclovir"
+is a different word, and "prescription" does not stem to "prescribed". So BM25
+put it below rank 5,000, while dpr's subword encoder still retrieved it.
+
+**Decision.** The example stays. The selection rule was fixed before the run,
+and swapping an example for a better story is what the rule exists to prevent.
+Its cause is stated instead:
+- `figures/gating_examples.png` carries the note under example 2;
+- `figures/data/gating_examples.csv` has it in `note`.
+
+The report and video should present it as a third kind of gating failure, next
+to the two passages bm25 ranked just below the cutoff (ranks 151 and 177): **a
+data-quality failure**. The gate inherits whatever the first stage cannot read.
+It is not evidence about lexical matching.
+
+One consequence is worth a sentence in the threats section. MS MARCO's encoding
+faults are known, and ir_datasets repairs them at read time, but the BM25 index
+was built from the raw text. Some fraction of bm25's gating failures may share
+this cause. It has not been measured; this is one confirmed case among 140.
+
+---
+
 <!-- next entry below -->
