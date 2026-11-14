@@ -3,7 +3,7 @@
 Everything below runs on a laptop CPU except the one Stage-2 cache fill, which
 needs a GPU and is already done. The whole project is frozen under config
 fingerprint **`46d0807d8ed3`** (`make freeze`). Every run record in the repo
-carries it: 25 of 25 committed manifests at the time of writing.
+carries it: 28 of 28 committed manifests at the time of writing.
 
 ## What is in git, and what is not
 
@@ -13,7 +13,7 @@ carries it: 25 of 25 committed manifests at the time of writing.
 | both Stage-1 runs (`runs/bm25.parquet`, `runs/dpr.parquet`) and their manifests | the Stage-2 cache (`cache/stage2.sqlite`, 173 MB) |
 | every run record (`*manifest*.json`): versions, seeds, inputs, digests | effect tables (`effects/real*/`, ~1.2 GB in all) |
 | the figures and the exact numbers they plot (`figures/`, `figures/data/`) | result CSVs (`analysis/*/`); their digests are in `docs/design_log.md` |
-| `docs/design_log.md`: every decision and every headline number | MS MARCO passage text |
+| `docs/design_log.md`: every decision and every headline number | MS MARCO passage text (only `figures/gating_examples.png` shows six short excerpts) |
 
 ## Environment
 
