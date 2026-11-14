@@ -172,6 +172,22 @@ Query labels use the frozen tau_query, set on the DCG@10 scale, so outside the
 headline setting they are descriptive. H7 is pre-registered at the headline and
 is not recomputed for the sensitivity settings.
 
+## Prediction and cost-fidelity (Week 4; RQ3, H1, H5)
+
+| file | what it does |
+|---|---|
+| `predict.py` | **predictors:** F1 conventional features from the factual run only, one model per stratum (ridge and gradient boosting) for E_rerank, E_gate, and Delta_t per policy, trained on the frozen split's `train` queries and scored on `test` within strata against the three shared baselines, plus rank displacement alone for H1. **Probes:** b extra Stage-2 calls per query on boundary / alternative / random outsiders, the no-gate world recomputed over C_q plus the probe set, at every configured budget; the full budget must reproduce E_gate exactly or the run stops |
+| `tests/test_predict.py` | no non-candidate Stage-2 score reaches a feature; Stage-2 features for survivors only; a full probe reproduces the engine; budgets are per query; every non-survivor gets a prediction; end-to-end run on a synthetic grid |
+
+    python -m experiments_shubham.predict          # both systems, headline K_c -> analysis/prediction/
+
+The feature boundary is the one that matters: a Stage-2 score outside C_q
+exists only because world C was computed, and for a non-survivor it determines
+E_gate, so non-survivor and selected-outsider models see Stage-1 and
+alternative-retriever features only. Evaluation is on judged documents, where
+an effect can be nonzero; query-level numbers compare the implied G_q, and the
+gate-sensitive label it gives, with the reference.
+
 ## Qualitative figure: real gating failures (Week 4)
 
 | file | what it does |
