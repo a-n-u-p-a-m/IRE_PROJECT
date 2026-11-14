@@ -1329,3 +1329,56 @@ checked after the edit.
 ---
 
 <!-- next entry below -->
+
+---
+
+### 2026-11-13 — Chaitanya: E1 engine validation stays; provisional synthetic predictors superseded; merge_cache provenance fix
+
+**Owner:** Chaitanya  
+**Commits:** `ac78c2c`, `7ef19bb`, `<next>`
+
+#### Correction: E1 engine validation is valid; only early synthetic predictor trials are superseded
+
+Shubham clarified that `effects/e1_manifest.json` (owner: shubham, 2026-10-27) is
+Experiment E1 — the counterfactual engine validation (81.6M rows, independent
+re-derivation with max |diff| 0.0, plus the five engine sanity checks across stress
+variants). It contains no predictors, features, or fidelity metrics.
+
+**Clarification and decision:**
+
+1. **E1 engine validation stands and stays in the report.**
+   `effects/e1_manifest.json` validates the mathematical correctness of the
+   counterfactual engine across 81.6 million rows. It has no dependency on the
+   Stage-2 cache or feature boundaries, and remains valid and cited in the report.
+
+2. **What is superseded:** Only the provisional synthetic predictor trials (from
+   late October in `experiments_chaitanya/synthetic_results/`, which predated the
+   survivor-boundary correction `rank ≤ k_c`). Those early synthetic numbers
+   leaked non-survivor Stage-2 scores and must not appear in the report or video.
+
+3. **Empirical predictor results:** `run_real_predictors.py` evaluates predictors
+   on the real Stage-2 cache (872,455 rows, `row_count_ok: true`) and frozen
+   universe under the freeze-v2 survivor boundary, writing to
+   `effects/real_predictors/`.
+
+**Action:** `effects/e1_manifest.json` stays in the report as the primary validation
+of the counterfactual engine. Empirical predictor fidelity and cost-fidelity curves
+are cited exclusively from `effects/real_predictors/`.
+
+#### `merge_cache.py` — provenance fix for `--skip-completeness`
+
+The manifest `note` previously claimed *"Completeness verified against the frozen
+universe"* unconditionally, even when `--skip-completeness` was passed. The
+manifest now records:
+
+```json
+"completeness_checked": true   // or false when --skip-completeness was used
+```
+
+and the `note` is conditional: a skipped run now states explicitly that
+per-query coverage was not verified. The actual merge that produced the live
+`cache/stage2.sqlite` did run the full check (`completeness_checked: true`,
+`row_count_ok: true`, 872,455 rows). This fix is forward-looking — it protects
+the provenance of any future re-merge.
+
+

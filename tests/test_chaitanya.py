@@ -522,3 +522,70 @@ class TestRealPredictorsSplit:
         assert loaded["val"] == {"q3"}
         assert loaded["test"] == {"q4", "q5"}
 
+    def test_load_query_split_nested_splits(self, tmp_path):
+        """Test loading query_split.json formatted with top-level metadata and 'splits' key."""
+        import json
+
+        from experiments_chaitanya.run_real_predictors import _load_query_split
+        split_file = tmp_path / "query_split.json"
+        split_file.write_text(json.dumps({
+            "seed": 42,
+            "n_queries": 5,
+            "sizes": {"train": 2, "val": 1, "test": 2},
+            "splits": {
+                "train": ["q10", "q20"],
+                "val": ["q30"],
+                "test": ["q40", "q50"]
+            }
+        }))
+        loaded = _load_query_split(split_file)
+        assert loaded["train"] == {"q10", "q20"}
+        assert loaded["val"] == {"q30"}
+        assert loaded["test"] == {"q40", "q50"}
+
+    def test_cost_fidelity_harness_sweep(self):
+        """Test CostFidelityHarness sweeps budgets across effect types."""
+        import numpy as np
+        import pandas as pd
+
+        from experiments_chaitanya.cost_fidelity import CostFidelityHarness
+        from experiments_chaitanya.predictors import fit_all_predictors
+        from shared.schema import DELTA_T, E_GATE, E_RERANK
+
+        np.random.seed(42)
+        df_eff = pd.DataFrame({
+            "query_id": ["q1"] * 50 + ["q2"] * 50,
+            "doc_id": [f"d{i}" for i in range(50)] * 2,
+            "effect_type": [E_RERANK] * 40 + [E_GATE] * 30 + [DELTA_T] * 30,
+            "stratum": ["survivor"] * 20 + ["non_survivor"] * 80,
+            "effect": np.random.randn(100),
+            "judged": [True] * 100,
+        })
+
+        feat_rows = []
+        for qid in ["q1", "q2"]:
+            for i in range(50):
+                did = f"d{i}"
+                for fname in [
+                    "stage1_rank", "stage1_score", "stage1_rank_norm",
+                    "stage1_percentile", "stage2_score", "stage2_score_norm",
+                    "is_survivor", "rank_drop"
+                ]:
+                    feat_rows.append({
+                        "query_id": qid,
+                        "doc_id": did,
+                        "feature_name": fname,
+                        "value": np.random.rand(),
+                    })
+        feat_df = pd.DataFrame(feat_rows)
+
+        predictors = fit_all_predictors(feat_df, df_eff)
+        assert len(predictors) == 3
+
+        harness = CostFidelityHarness(predictors)
+        cf = harness.sweep_budgets(full_effects=df_eff, feature_df=feat_df, budgets=[0, 10, 50, 100])
+        assert not cf.empty
+        assert "budget" in cf.columns
+        assert "spearman" in cf.columns
+        assert "effect_type" in cf.columns
+
