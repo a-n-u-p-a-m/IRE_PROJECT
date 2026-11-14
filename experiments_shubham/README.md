@@ -188,6 +188,19 @@ alternative-retriever features only. Evaluation is on judged documents, where
 an effect can be nonzero; query-level numbers compare the implied G_q, and the
 gate-sensitive label it gives, with the reference.
 
+## Outsider policies and figures (Week 3/4 checks for the report)
+
+| file | what it does |
+|---|---|
+| `outsiders.py` | what each policy actually promoted in world D (judged, relevant, reached the top-k, gating failures among them), each policy's false-negative rate against the exact gating failures, and the random control under each seed separately |
+| `figures.py` | the five report/video figures, one `--only <name>` command each, each with its plotted numbers in `figures/data/` |
+| `tests/test_outsiders.py` | false negatives and promotion on frames with known answers; seeds averaged, not pooled |
+
+    python -m experiments_shubham.outsiders        # -> analysis/outsiders/
+    python -m experiments_shubham.figures          # -> figures/
+
+`REPRODUCE.md` at the repository root runs the whole pipeline in order.
+
 ## Qualitative figure: real gating failures (Week 4)
 
 | file | what it does |

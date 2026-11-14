@@ -23,6 +23,10 @@ ruff>=0.6
 matplotlib>=3.8
 seaborn>=0.13
 
+# The Week-4 predictors (experiments_shubham/predict.py): ridge and
+# gradient-boosted trees. Nothing in shared/ imports it.
+scikit-learn>=1.4
+
 # ── Stage 2: the cross-encoder ────────────────────────────────────────
 # Needed only by M3's reranker wrapper and cache filler. Install the torch
 # build matching the CUDA on the target machine first, then:
