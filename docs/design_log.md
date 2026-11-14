@@ -1328,14 +1328,10 @@ checked after the edit.
 
 ---
 
-<!-- next entry below -->
-
----
-
 ### 2026-11-13 — Chaitanya: E1 engine validation stays; provisional synthetic predictors superseded; merge_cache provenance fix
 
 **Owner:** Chaitanya  
-**Commits:** `ac78c2c`, `7ef19bb`, `<next>`
+**Commits:** `ac78c2c`, `7ef19bb`, `7581ce1`
 
 #### Correction: E1 engine validation is valid; only early synthetic predictor trials are superseded
 
@@ -1351,9 +1347,9 @@ variants). It contains no predictors, features, or fidelity metrics.
    counterfactual engine across 81.6 million rows. It has no dependency on the
    Stage-2 cache or feature boundaries, and remains valid and cited in the report.
 
-2. **What is superseded:** Only the provisional synthetic predictor trials (from
-   late October in `experiments_chaitanya/synthetic_results/`, which predated the
-   survivor-boundary correction `rank ≤ k_c`). Those early synthetic numbers
+2. **What is superseded:** Only the provisional synthetic predictor trials (late
+   October, never committed, and predating the survivor-boundary correction
+   `rank ≤ k_c`). Those early synthetic numbers
    leaked non-survivor Stage-2 scores and must not appear in the report or video.
 
 3. **Empirical predictor results:** `run_real_predictors.py` evaluates predictors
@@ -1364,6 +1360,12 @@ variants). It contains no predictors, features, or fidelity metrics.
 **Action:** `effects/e1_manifest.json` stays in the report as the primary validation
 of the counterfactual engine. Empirical predictor fidelity and cost-fidelity curves
 are cited exclusively from `effects/real_predictors/`.
+
+> **Superseded in part — see 2026-11-14.** `effects/real_predictors/` from
+> `run_real_predictors.py` is not citable (its cost-fidelity curves report the
+> reference wherever a prediction is missing, and non-survivors get no E_gate
+> prediction). The predictor and cost-fidelity results are in
+> `analysis/prediction/`, from `experiments_shubham/predict.py`.
 
 #### `merge_cache.py` — provenance fix for `--skip-completeness`
 
@@ -1382,3 +1384,157 @@ per-query coverage was not verified. The actual merge that produced the live
 the provenance of any future re-merge.
 
 
+---
+
+## 2026-11-14 — Prediction and cost-fidelity: cheap features localise, a 20-call probe recovers the gate (Shubham)
+
+Chaitanya's Week-4 deliverable (RQ3, H1, H5), finished here at the team's
+request. `experiments_chaitanya/run_real_predictors.py` runs end to end after
+`7581ce1`, but on the real data its results are not citable:
+
+1. its cost-fidelity curves read *perfect* recovery at zero extra calls,
+   because a missing prediction silently kept the true effect;
+2. the per-query budgets were spent as totals over 29 queries, so every curve
+   was flat until the full budget;
+3. non-survivors got no E_gate prediction at all, because the only model needed
+   Stage-2 features that exist only inside C_q;
+4. the run took 45 minutes in row-by-row loops.
+
+Its output (`effects/real_predictors/`) is not committed. The results below
+come from `experiments_shubham/predict.py` (commit `7dd5092`; record
+`analysis/prediction/prediction_manifest.json`; 457 s for both systems on an
+M1, no GPU).
+
+**Method, in one paragraph.**
+- *Features:* F1 conventional features from the factual run (§6.1):
+  - for every document: Stage-1 log-rank, the score margin to the K_c-th
+    document, the floor flag, and the alternative retriever's log-rank, its
+    top-K_c flag and its floor flag;
+  - inside C_q only: the Stage-2 score, Stage-2 rank, margin to the top-k
+    boundary, and rank displacement.
+- *Models:* one per stratum (ridge, and gradient-boosted trees), so a
+  non-survivor's model never sees a Stage-2 score: that score exists only
+  because world C was computed, and for a non-survivor it determines E_gate.
+- *Training and scoring:* trained on the 49 `train` queries of
+  `data/query_split.json` and scored on its 29 `test` queries. No
+  hyperparameter was tuned, so `val` is unused.
+- *Evaluation population:* judged documents, via
+  `shared.metrics.evaluate_within_strata`, within strata, with
+  1,000-resample query bootstraps.
+- *Comparison:* against the three shared baselines, and against displacement
+  alone for H1.
+- *Probes:* spend b extra Stage-2 calls per query on boundary / alternative /
+  random outsiders and recompute the no-gate world over C_q plus the probe
+  set. Probing every outsider reproduces E_gate exactly (max |diff| 0.0, both
+  systems), which the run checks before reporting anything. Probes need no
+  training, so they are scored on all 97 queries.
+
+### Predictors: they rank, they do not size
+
+MAE on held-out judged documents, 95% interval; Spearman in brackets. "zero"
+predicts no effect anywhere.
+
+| target, stratum | system | zero | stratum mean | ridge | boosted trees | displacement |
+|---|---|---|---|---|---|---|
+| E_rerank, survivors | bm25 | 0.205 | 0.295 | 0.386 (0.38) | **0.205** [0.165, 0.255] (**0.52**) | 0.322 (0.27) |
+| | dpr | 0.200 | 0.214 | 0.351 (0.31) | **0.190** [0.161, 0.226] (**0.54**) | 0.286 (0.23) |
+| E_gate, survivors | bm25 | 0.037 | 0.064 | 0.072 (0.28) | 0.060 (0.27) | 0.067 (0.17) |
+| | dpr | 0.005 | 0.017 | 0.022 (0.14) | 0.022 (0.13) | 0.017 (0.01) |
+| E_gate, non-survivors | bm25 | 0.030 | 0.055 | 0.076 (0.19) | 0.047 (0.17) | undefined |
+| | dpr | 0.002 | 0.009 | 0.011 (0.05) | 0.012 (0.03) | undefined |
+| Δ_t alternative, removed | bm25 | 0.126 | 0.218 | 0.251 (0.36) | **0.095** [0.059, 0.142] (0.34) | — |
+| Δ_t alternative, selected outsider | bm25 | 0.282 | 0.438 | 0.420 (0.37) | 0.369 (0.35) | — |
+| Δ_t alternative, retained | bm25 | 0.032 | 0.045 | 0.051 (0.15) | 0.052 (0.16) | — |
+
+DPR's Δ_t cells, and the boundary and random policies, have the same shape and
+are in `fidelity.csv`.
+
+  * **On magnitude, "nothing moved" is nearly unbeatable.** A learned MAE
+    beats zero only for boosted trees on E_rerank under dpr and on Δ_t
+    removed under bm25, and both intervals overlap zero's. Effects are
+    overwhelmingly zero, so MAE rewards predicting zero.
+  * **On rank, the features carry real information for E_rerank** (ρ 0.52 and
+    0.54, intervals [0.47, 0.57] and [0.47, 0.60]), some for E_gate on
+    survivors (0.13–0.28), and **almost none for the gate's victims**: ρ 0.17
+    for bm25 non-survivors, 0.03 for dpr. That is structural. A gating failure
+    is a passage Stage 1 under-ranked, and Stage-1 features are exactly the
+    signal that failed.
+  * **H1 is supported.** Displacement alone tracks E_rerank (ρ 0.27 / 0.23)
+    better than E_gate on survivors (0.17 / 0.01), and is undefined for
+    non-survivors, which is where gate failures are.
+  * At the query level (29 test queries), predicted E_gate implies a G_q
+    ranking of ρ 0.60 [0.28, 0.79] for bm25 (ridge and boosted trees alike)
+    and nothing for dpr (−0.02 to 0.17). The test split holds 4 gate-sensitive
+    bm25 queries and 1 dpr one, so the label agreement there is too thin to
+    quote.
+
+### Probes (H5): the alternative retriever finds the gate's losses almost for free
+
+All 97 queries. For each probe: G_q Spearman [95% interval], F1 for the
+gate-sensitive label it implies, and the share of the gate's total loss whose
+documents the probe recovers. bm25 has 14 gate-sensitive queries and 140
+gating failures; dpr has 4 and 21.
+
+| system | policy | 20 calls/query | 100 calls/query | 500 calls/query |
+|---|---|---|---|---|
+| bm25 | **alternative** | **0.89** [0.80, 0.96], F1 0.89, **86%** | 0.91, F1 0.93, 95% | 0.97, F1 0.93, 99.7% |
+| bm25 | boundary | 0.42 [0.26, 0.56], F1 0.13, 14% | 0.61, F1 0.57, 35% | 0.74, F1 0.85, 65% |
+| bm25 | random | 0.18, F1 0, 0.2% | 0.18, F1 0.09, 0.4% | 0.37, F1 0.32, 8% |
+| dpr | alternative | 0.41 [0.11, 0.65], F1 0.33, 38% | 0.53, F1 0.67, 59% | 0.83, F1 0.86, 88% |
+| dpr | boundary | 0.52 [0.25, 0.73], F1 0.40, 24% | 0.66, F1 0.57, 53% | 0.87, F1 1.00, 91% |
+| dpr | random | 0.21, F1 0, 0% | 0.30, F1 0.13, 0% | 0.37, F1 0.24, 8% |
+
+Random is averaged over seeds 42–44; its intervals are indicative only.
+
+**H5 holds, and the policy decides it.** For bm25, 20 extra calls per query on
+dpr's top outsiders (1,940 calls in all, **0.22% of the exact reference's
+862,755**, about 7 s of T4 time at 257–282 pairs/s) recover 86% of the gate's
+loss. They rank queries by G_q at ρ 0.89 and label 13 of the 14 gate-sensitive
+queries, 12 of them correctly. That beats every predictor (ρ 0.60) by a wide
+margin. On bm25's own ordering, boundary probes find little until 500 calls,
+and random finds nothing, which is the control doing its job.
+
+This is the 2026-11-13 recall finding seen from the other side. bm25's gating
+failures are the passages bm25 ranks low and dpr ranks high, so a second
+opinion from dpr goes straight to them. For dpr the losses are few and
+scattered: alternative and boundary probes are comparable, and neither is
+cheap.
+
+### Compute accounting
+
+| step | cost |
+|---|---|
+| Stage-2 cache fill: 872,455 pairs, three T4 shards (Colab, Kaggle) | 52–57 GPU-min at 257–282 pairs/s |
+| Effects (`real.py`, all K_c, both modes, full t × policy × seed grid) | 630 s bm25, 627 s dpr; ~3.5 GB peak; CPU |
+| Sensitivity runs (top-k, RBP, DCG@5, DCG@20 at K_c 100) | 8 × 187–196 s |
+| Analysis (10,000 permutations, 1,000 bootstrap) | 271 s bm25, 269 s dpr |
+| Features (872,455 rows per system) | 1.6 s, 163 MB peak |
+| Predictors: fit, predict, evaluate with bootstrap | 168 s bm25, 170 s dpr |
+| Probes (30 configurations × 97 queries, plus the exact check) | 47 s bm25, 46 s dpr |
+| Exact E_gate reference, for comparison | 862,755 extra Stage-2 calls per system (8,894 per query) |
+
+Hashing (F2–F4) is out per the 2026-11-11 decision, so every predictor above
+is F1.
+
+### Qualifications
+
+  * Judged documents only. An unjudged document's effect is zero under every
+    world, so it is not evidence about a predictor either way.
+  * The probes' "extra calls" are looked up in the cache, not recomputed. Each
+    lookup counts as the call a deployment would have to make, and the counts
+    are exact.
+  * `top_m_recovery` is meaningless for constant baselines (ties are broken
+    arbitrarily), so it is not quoted for them.
+  * Δ_t models take t as a feature and are fitted per policy; alternative is
+    the confirmatory policy.
+
+| file (gitignored; digest, sha256 first 16 hex) | digest |
+|---|---|
+| `analysis/prediction/fidelity.csv` | `59060f515bd07856` |
+| `analysis/prediction/query_level.csv` | `c897b7cd05800a09` |
+| `analysis/prediction/probe_doc.csv` | `cc646683d68feb9d` |
+| `analysis/prediction/macro.csv` | `e4dd7283229e5354` |
+
+---
+
+<!-- next entry below -->
