@@ -334,6 +334,15 @@ def cost_fidelity(cfg, k_c: int, effects_dir: Path, analysis_dir: Path):
 # 5. Gating-failure examples
 # ──────────────────────────────────────────────────────────────────────
 
+#: Checked causes, shown under an example. The selection rule is fixed, so an
+#: example is never swapped; what was learned about it is stated instead.
+EXAMPLE_NOTES = {
+    "8117090": "Cause: an encoding fault, not a lexical miss. The collection stores "
+               "“Famvir®” double-encoded as “FamvirÂ®”, so BM25 indexed “famvirâ” and the "
+               "query word “famvir” cannot match it (raw bytes checked, 2026-11-14).",
+}
+
+
 def _passages(path: Path) -> dict[str, str]:
     with open(path, newline="", encoding="utf-8") as fh:
         return {r[0]: r[1] for r in csv.reader(fh, delimiter="\t") if len(r) >= 2}
@@ -366,6 +375,9 @@ def gating_examples(cfg, k_c: int, effects_dir: Path, analysis_dir: Path):
                 color=SLOT[0], fontsize=8.2, va="top", transform=ax.transAxes)
         ax.text(0, 0.26, textwrap.fill(r["top_text"], 118), fontsize=7.8, va="top",
                 transform=ax.transAxes, color=INK)
+        if r["doc_id"] in EXAMPLE_NOTES:
+            ax.text(0, 0.02, textwrap.fill(EXAMPLE_NOTES[r["doc_id"]], 130), fontsize=7.2,
+                    va="top", style="italic", transform=ax.transAxes, color=INK_2)
     fig.suptitle(f"Three gating failures, chosen by a rule fixed before the run "
                  f"(BM25, K_c = {k_c})", x=0.01, ha="left", fontsize=10.5)
     fig.text(0.01, 0.005, "Grades: TREC-DL qrels (3 = perfectly relevant). Passages: MS MARCO "
@@ -373,6 +385,7 @@ def gating_examples(cfg, k_c: int, effects_dir: Path, analysis_dir: Path):
     fig.tight_layout(rect=(0, 0.02, 1, 1))
     # The figure shows short excerpts; the committed data file keeps ids, ranks
     # and grades only, so the repository still carries no passage text.
+    data["note"] = data["doc_id"].map(EXAMPLE_NOTES).fillna("")
     return fig, data.drop(columns=["excluded_text", "top_text"])
 
 
